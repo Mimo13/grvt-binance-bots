@@ -122,6 +122,62 @@ describe('GridEngine.startBot Binance Spot path', () => {
     expect((binanceClient as any).setLeverage).toBeUndefined();
     expect(mockDb.updateBot).toHaveBeenCalledWith(9, { status: 'running' });
   });
+
+  it('archives Binance Spot fills using normalized IExchangeClient fill fields', async () => {
+    const bot = {
+      id: 10,
+      user_id: 1,
+      exchange: 'binance',
+      pair: 'BTCUSDC',
+      direction: 'long',
+      lower_price: 90000,
+      upper_price: 110000,
+      num_grids: 2,
+      spacing: 10000,
+      leverage: 1,
+      investment_usdt: 10,
+      quantity_per_level: 0.001,
+      status: 'running',
+    };
+    const binanceClient = {
+      exchange: 'binance',
+      network: 'testnet',
+      getFillHistory: vi.fn().mockResolvedValue([
+        {
+          fillId: '98765',
+          orderId: '12345',
+          symbol: 'BTCUSDC',
+          side: 'buy',
+          quantity: '0.001',
+          price: '100000',
+          fee: '0.05',
+          feeCurrency: 'USDC',
+          liquidity: 'taker',
+          createdTime: 1710000000000,
+        },
+      ]),
+    };
+    mockGetExchangeClient.mockReturnValue(binanceClient);
+    mockDb.insertFillArchive.mockResolvedValue(true);
+
+    const engine = new GridEngine();
+    (engine as any).bots.set(10, new GridBotInstance(bot as any, binanceClient as any));
+
+    await (engine as any).pollFillArchive();
+
+    expect(binanceClient.getFillHistory).toHaveBeenCalledWith('BTCUSDC', 1000);
+    expect(mockDb.insertFillArchive).toHaveBeenCalledWith({
+      fill_id: '98765',
+      event_time: '1710000000000',
+      is_buyer: 1,
+      price: 100000,
+      size: 0.001,
+      fee: 0.05,
+      created_at: new Date(1710000000000).toISOString(),
+      bot_id: 10,
+      instrument: 'BTCUSDC',
+    });
+  });
 });
 
 describe('GridBotInstance', () => {

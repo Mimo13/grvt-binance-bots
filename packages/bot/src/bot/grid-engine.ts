@@ -2031,7 +2031,9 @@ export class GridEngine extends EventEmitter {
       const client = await this.getClientForBot(bot);
       let allFills: any[];
       try {
-        allFills = await client.getFillHistory(1000, instrument);
+        allFills = (bot as any).exchange === 'binance'
+          ? await (client as any).getFillHistory(instrument, 1000)
+          : await (client as any).getFillHistory(1000, instrument);
       } catch (err) {
         log.warn(`⚠️ Fill poller [bot ${botId} ${instrument}]: getFillHistory failed: ${(err as Error).message}`);
         continue;
@@ -2045,22 +2047,30 @@ export class GridEngine extends EventEmitter {
       // IGNORE on fill_id silently discards everything. Filter
       // client-side instead. Discovered 2026-05-03 — bot 44 (ETH) had
       // ingested 291 SOL fills from bot 48 across 8 days.
-      const ownFills = allFills.filter((f) => f.instrument === instrument);
+      const ownFills = allFills.filter((f) => (f.instrument ?? f.symbol) === instrument);
 
       let added = 0;
       let feeSum = 0;
       for (const f of ownFills) {
-        const eventTime = String(f.event_time ?? '');
+        const rawEventTime = f.event_time ?? f.createdTime ?? f.created_time ?? f.time;
+        const eventTime = String(rawEventTime ?? '');
         if (!eventTime) continue;
+        const eventTimeNum = Number(rawEventTime);
         const fee = parseFloat(f.fee ?? '0');
+        const isBuyer = typeof f.is_buyer === 'boolean' ? f.is_buyer : f.side === 'buy';
+        const size = parseFloat(f.size ?? f.quantity ?? f.qty ?? '0');
+        const price = parseFloat(f.price ?? '0');
+        const createdAt = Number.isFinite(eventTimeNum) && eventTimeNum < 10_000_000_000_000
+          ? new Date(eventTimeNum).toISOString()
+          : new Date(eventTimeNum / 1_000_000).toISOString();
         const inserted = await db.insertFillArchive({
-          fill_id: eventTime,
+          fill_id: String(f.fill_id ?? f.fillId ?? eventTime),
           event_time: eventTime,
-          is_buyer: f.is_buyer ? 1 : 0,
-          price: parseFloat(f.price ?? '0'),
-          size: parseFloat(f.size ?? '0'),
+          is_buyer: isBuyer ? 1 : 0,
+          price,
+          size,
           fee,
-          created_at: new Date(Number(eventTime) / 1_000_000).toISOString(),
+          created_at: createdAt,
           bot_id: botId,
           instrument,
         });
