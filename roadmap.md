@@ -851,3 +851,13 @@ Respuesta corta:
 - No usar endpoints `/fapi/*`, `positionRisk`, `setLeverage` ni streams futures para Binance en esta etapa.
 - Prioridad inmediata: hacer verde el backend typecheck y separar la ruta Binance Spot de los supuestos GRVT/Futures.
 
+### Decisión posterior de producto: Telegram-only
+
+Mimo aclaró: “No vamos a usar email, solo Telegram”.
+
+Implicaciones:
+- El flujo de email/password/ADMIN_EMAIL no debe bloquear la estabilización Binance Spot.
+- Las pruebas ADMIN_EMAIL pasan a considerarse legacy/históricas hasta eliminar o sustituir el auth email por identidad Telegram.
+- El flujo operativo futuro debe basarse en Telegram para identidad/control/notificaciones.
+- Antes del smoke bot real, definir cómo se asocia `telegram_user_id` con el operador y cómo se autorizan comandos/control del bot.
+

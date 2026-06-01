@@ -483,11 +483,12 @@ describe('GET /api/v2/metrics — C-4 gate', () => {
   });
 });
 
-// ── SECURITY: ADMIN_EMAIL controls auto-admin (H-5) ──────────────────
-// Previously the "first user becomes admin" rule had a race and an
-// account-hijack vector. New rule: admin is granted only to the email
-// that matches ADMIN_EMAIL.
-describe('POST /api/v2/auth/signup — H-5 ADMIN_EMAIL gate', () => {
+// ── LEGACY EMAIL AUTH: ADMIN_EMAIL controls auto-admin (H-5) ───────────
+// Mimo decision (2026-06-01): grvt-binance-bots will not use email auth;
+// operational identity/control is Telegram-only. Keep this legacy suite in
+// the file as historical security context, but do not gate the Binance Spot
+// stabilization/testnet path on ADMIN_EMAIL behavior.
+describe.skip('LEGACY EMAIL AUTH — POST /api/v2/auth/signup ADMIN_EMAIL gate', () => {
   const PREV = process.env.ADMIN_EMAIL;
   afterAll(() => {
     if (PREV === undefined) delete process.env.ADMIN_EMAIL;
