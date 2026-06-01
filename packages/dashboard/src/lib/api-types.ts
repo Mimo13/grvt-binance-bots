@@ -4,6 +4,7 @@
 
 export type BotStatus = 'running' | 'paused' | 'stopped' | 'error';
 export type GrvtNetwork = 'testnet' | 'mainnet';
+export type Exchange = 'grvt' | 'binance';
 
 export interface BotSummary {
   id: number;
@@ -45,6 +46,9 @@ export interface BotSummary {
   grvt_sub_account_id?: number | null;
   // Per-bot GRVT environment. Existing rows default to testnet.
   grvt_network?: GrvtNetwork;
+  // Exchange: 'grvt' (USDT pairs) or 'binance' (USDC pairs).
+  // Existing rows default to 'grvt'.
+  exchange?: Exchange;
 }
 
 export interface GridLevel {
@@ -281,6 +285,9 @@ export interface ValidateBotInput {
   grvt_sub_account_id?: number | null;
   // Which GRVT environment this bot should use for login/trading endpoints.
   grvt_network?: GrvtNetwork;
+  // Exchange: 'grvt' (USDT pairs) or 'binance' (USDC pairs).
+  // Used by the backend to route to the correct exchange client.
+  exchange?: Exchange;
 }
 
 // H.5: GRVT sub-account row as the dashboard sees it (no encrypted fields).
@@ -315,6 +322,7 @@ export interface ValidateBotResult {
   };
   warnings: string[];
   grvt_network?: GrvtNetwork;
+  exchange?: Exchange;
 }
 
 // Kline / candlestick — both timestamps in unix MILLISECONDS (not ns).

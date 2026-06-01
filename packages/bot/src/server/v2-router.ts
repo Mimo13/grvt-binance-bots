@@ -1148,8 +1148,16 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
 
   // ── GET /api/v2/instruments ───────────────────────────────────────
   // Cached 60s — instruments don't change minute-to-minute.
+  // network param: 'testnet' | 'mainnet' (GRVT) or 'binance' (Binance USDC perpetuals)
   router.get('/instruments', asyncHandler(async (req, res) => {
-    const network: GrvtNetwork = req.query.network === 'mainnet' ? 'mainnet' : 'testnet';
+    const rawNetwork = req.query.network;
+    if (rawNetwork === 'binance') {
+      const { BinanceClient } = await import('../api/binance-client');
+      const data = await cache.getOrFetch('instruments:binance', 60_000, () => new BinanceClient().getInstruments());
+      res.json({ instruments: data });
+      return;
+    }
+    const network: GrvtNetwork = rawNetwork === 'mainnet' ? 'mainnet' : 'testnet';
     const data = await cache.getOrFetch(`instruments:${network}`, 60_000, () => new GRVTClient(undefined, network).getInstruments());
     res.json({ instruments: data, grvt_network: network });
     return;

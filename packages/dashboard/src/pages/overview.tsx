@@ -119,6 +119,14 @@ export function OverviewPage() {
   const pairExposure = summary?.pairExposure ?? {};
   const runningCount = summary?.runningCount ?? bots.filter((b) => b.status === 'running').length;
 
+  // Filter state: 'all' | 'grvt' | 'binance'
+  const [exchangeFilter, setExchangeFilter] = useState<'all' | 'grvt' | 'binance'>('all');
+
+  // Filter bots by exchange
+  const filteredBots = exchangeFilter === 'all'
+    ? bots
+    : bots.filter((b) => (b.exchange ?? 'grvt') === exchangeFilter);
+
   return (
     <div className="flex flex-col gap-6">
       {/* Page header + create CTA */}
@@ -208,13 +216,30 @@ export function OverviewPage() {
         </div>
       )}
 
+      {/* Exchange filter tabs */}
+      <div className="flex gap-1 border-b border-border-subtle">
+        {(['all', 'grvt', 'binance'] as const).map((f) => (
+          <button
+            key={f}
+            onClick={() => setExchangeFilter(f)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              exchangeFilter === f
+                ? 'border-primary text-primary'
+                : 'border-transparent text-text-muted hover:text-text-primary'
+            }`}
+          >
+            {f === 'all' ? `All (${bots.length})` : f === 'grvt' ? `GRVT (${bots.filter(b => (b.exchange ?? 'grvt') === 'grvt').length})` : `Binance (${bots.filter(b => b.exchange === 'binance').length})`}
+          </button>
+        ))}
+      </div>
+
       {/* BotCard grid */}
       <div>
         <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">
-          {t('nav.bots')}
+          {t('nav.bots')} {filteredBots.length > 0 && `(${filteredBots.length})`}
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {bots.map((bot) => (
+          {filteredBots.map((bot) => (
             <BotCard key={bot.id} bot={bot} />
           ))}
           {/* Create-new tile */}

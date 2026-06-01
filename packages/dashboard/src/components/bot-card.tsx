@@ -79,13 +79,21 @@ export function BotCard({ bot }: BotCardProps) {
       >
         {/* Header */}
         <div className="flex items-start justify-between mb-3">
-          <div>
-            <h3 className="text-base font-semibold text-text-primary">
-              {bot.pair}
-            </h3>
-            <p className="text-2xs uppercase tracking-wider text-text-muted mt-0.5">
-              {bot.direction} · {bot.leverage}x
-            </p>
+          <div className="flex items-center gap-2">
+            {/* Exchange badge */}
+            {bot.exchange === 'binance' && (
+              <span className="px-1.5 py-0.5 text-2xs font-mono rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                BIN
+              </span>
+            )}
+            <div>
+              <h3 className="text-base font-semibold text-text-primary">
+                {bot.pair}
+              </h3>
+              <p className="text-2xs uppercase tracking-wider text-text-muted mt-0.5">
+                {bot.direction} · {bot.leverage}x
+              </p>
+            </div>
           </div>
           <StatusPill status={status} />
         </div>

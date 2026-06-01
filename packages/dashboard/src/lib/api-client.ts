@@ -128,7 +128,7 @@ export const api = {
   getBot: (id: number) => request<{ bot: BotSummary }>(`/bots/${id}`),
   getGridState: (id: number) => request<GridState>(`/bots/${id}/grid-state`),
 
-  getInstruments: (network?: 'testnet' | 'mainnet') => {
+  getInstruments: (network?: 'testnet' | 'mainnet' | 'binance') => {
     const qs = network ? `?network=${encodeURIComponent(network)}` : '';
     return request<{ instruments: unknown[]; grvt_network?: 'testnet' | 'mainnet' }>(`/instruments${qs}`);
   },

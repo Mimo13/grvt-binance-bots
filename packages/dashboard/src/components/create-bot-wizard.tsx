@@ -73,6 +73,8 @@ interface WizardState {
   // H.5: '' = use default credentials. Otherwise = sub-account row id (as string for <select>).
   subAccountId: string;
   grvtNetwork: GrvtNetwork;
+  // Exchange: 'grvt' (USDT pairs) or 'binance' (USDC pairs).
+  exchange: 'grvt' | 'binance';
 }
 
 const INITIAL_STATE: WizardState = {
@@ -96,6 +98,7 @@ const INITIAL_STATE: WizardState = {
   activeWindowSize: '70',
   subAccountId: '',
   grvtNetwork: 'testnet',
+  exchange: 'grvt',
 };
 
 // H.1: hardcoded fallback — used while the API query is loading
@@ -133,10 +136,10 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
   const [validated, setValidated] = useState<ValidateBotResult | null>(null);
   const navigate = useNavigate();
 
-  // H.1: fetch available instruments from GRVT API
+  // H.1: fetch available instruments from GRVT API or Binance
   const instrumentsQuery = useQuery({
-    queryKey: ['instruments', state.grvtNetwork],
-    queryFn: () => api.getInstruments(state.grvtNetwork),
+    queryKey: ['instruments', state.exchange, state.grvtNetwork],
+    queryFn: () => api.getInstruments(state.exchange === 'binance' ? 'binance' : state.grvtNetwork),
     staleTime: 60_000,
     enabled: open,
   });
@@ -151,8 +154,18 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
   const subAccounts = subAccountsQuery.data ?? [];
   const PAIRS = instrumentsQuery.data?.instruments
     ? (instrumentsQuery.data.instruments as any[])
-        .filter((i: any) => i.instrument?.includes('_Perp') || i.symbol?.includes('_Perp'))
+        .filter((i: any) => {
+          if (state.exchange === 'binance') {
+            // Binance: USDC perpetual pairs, e.g. "BTCUSDC", "ETHUSDC"
+            return !!(i.symbol && i.quoteAsset === 'USDC' && i.contractType === 'PERPETUAL');
+          }
+          // GRVT: USDT perpetual pairs, e.g. "BTC_USDT_Perp"
+          return !!(i.instrument?.includes('_Perp') || i.symbol?.includes('_Perp'));
+        })
         .map((i: any) => {
+          if (state.exchange === 'binance') {
+            return { value: i.symbol, label: i.symbol };
+          }
           const name = i.instrument ?? i.symbol ?? i.name;
           return { value: name, label: name.replace(/_/g, '-') };
         })
@@ -238,6 +251,7 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
       ...autoShiftPayload,
       ...virtualPayload,
       grvt_network: state.grvtNetwork,
+      exchange: state.exchange,
       ...subAccountPayload,
     } as any);
   }
@@ -276,6 +290,7 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
         investment_usdt: parseFloat(state.investment),
         leverage: parseInt(state.leverage, 10),
         grvt_network: state.grvtNetwork,
+        exchange: state.exchange,
         ...(state.virtualEnabled
           ? {
               virtual_enabled: true,
@@ -449,31 +464,31 @@ function StepPair({
   return (
     <div>
       <div className="mb-5">
-        <h3 className="text-sm font-semibold text-text-primary mb-2">Mercado GRVT</h3>
+        <h3 className="text-sm font-semibold text-text-primary mb-2">Exchange</h3>
         <div className="grid grid-cols-2 gap-3">
-          {(['testnet', 'mainnet'] as const).map((network) => {
-            const selected = state.grvtNetwork === network;
+          {(['grvt', 'binance'] as const).map((exchange) => {
+            const selected = state.exchange === exchange;
             return (
               <button
-                key={network}
+                key={exchange}
                 type="button"
-                onClick={() => update('grvtNetwork', network)}
+                onClick={() => update('exchange', exchange)}
                 className={cn(
                   'rounded-md border p-4 text-left transition-colors',
                   selected
-                    ? network === 'mainnet'
-                      ? 'border-danger bg-danger-soft text-text-primary'
+                    ? exchange === 'binance'
+                      ? 'border-warning bg-warning-soft text-text-primary'
                       : 'border-primary bg-primary-soft text-text-primary'
                     : 'border-border-subtle bg-bg-surface hover:border-border-default'
                 )}
               >
                 <div className="text-sm font-semibold uppercase tracking-wider">
-                  {network === 'mainnet' ? 'Mainnet' : 'Testnet'}
+                  {exchange === 'binance' ? 'Binance' : 'GRVT'}
                 </div>
                 <div className="mt-1 text-2xs text-text-muted">
-                  {network === 'mainnet'
-                    ? 'Órdenes reales contra trades.grvt.io. Portfolio mainnet puede estar a $0.'
-                    : 'Sandbox GRVT contra edge/market/trades.testnet.grvt.io.'}
+                  {exchange === 'binance'
+                    ? 'USDC perpetuals en Binance USDⓈ-Margined Futures.'
+                    : 'USDT perpetuals en GRVT Testnet.'}
                 </div>
               </button>
             );
@@ -481,10 +496,81 @@ function StepPair({
         </div>
       </div>
 
+      {state.exchange === 'binance' ? (
+        /* Binance network selector */
+        <div className="mb-5">
+          <h3 className="text-sm font-semibold text-text-primary mb-2">Red Binance</h3>
+          <div className="grid grid-cols-2 gap-3">
+            {(['testnet', 'mainnet'] as const).map((network) => {
+              const selected = state.grvtNetwork === network;
+              return (
+                <button
+                  key={network}
+                  type="button"
+                  onClick={() => update('grvtNetwork', network)}
+                  className={cn(
+                    'rounded-md border p-4 text-left transition-colors',
+                    selected
+                      ? network === 'mainnet'
+                        ? 'border-danger bg-danger-soft text-text-primary'
+                        : 'border-warning bg-warning-soft text-text-primary'
+                      : 'border-border-subtle bg-bg-surface hover:border-border-default'
+                  )}
+                >
+                  <div className="text-sm font-semibold uppercase tracking-wider">
+                    {network === 'mainnet' ? 'Mainnet' : 'Testnet'}
+                  </div>
+                  <div className="mt-1 text-2xs text-text-muted">
+                    {network === 'mainnet'
+                      ? 'Órdenes reales contra fapi.binance.com. Puedes perder todo.'
+                      : 'Sandbox contra testnet.binance.vision. Sin dinero real.'}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        /* GRVT network selector */
+        <div className="mb-5">
+          <h3 className="text-sm font-semibold text-text-primary mb-2">Red GRVT</h3>
+          <div className="grid grid-cols-2 gap-3">
+            {(['testnet', 'mainnet'] as const).map((network) => {
+              const selected = state.grvtNetwork === network;
+              return (
+                <button
+                  key={network}
+                  type="button"
+                  onClick={() => update('grvtNetwork', network)}
+                  className={cn(
+                    'rounded-md border p-4 text-left transition-colors',
+                    selected
+                      ? network === 'mainnet'
+                        ? 'border-danger bg-danger-soft text-text-primary'
+                        : 'border-primary bg-primary-soft text-text-primary'
+                      : 'border-border-subtle bg-bg-surface hover:border-border-default'
+                  )}
+                >
+                  <div className="text-sm font-semibold uppercase tracking-wider">
+                    {network === 'mainnet' ? 'Mainnet' : 'Testnet'}
+                  </div>
+                  <div className="mt-1 text-2xs text-text-muted">
+                    {network === 'mainnet'
+                      ? 'Órdenes reales contra trades.grvt.io. Portfolio mainnet puede estar a $0.'
+                      : 'Sandbox GRVT contra edge/market/trades.testnet.grvt.io.'}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* H.5: only show the picker when the user has at least one sub-account.
           Otherwise the bot routes through default credentials and the UI is
-          identical to the pre-H.5 wizard. */}
-      {subAccounts.length > 0 && (
+          identical to the pre-H.5 wizard.
+          Binance does not support GRVT sub-accounts — hide this section. */}
+      {state.exchange !== 'binance' && subAccounts.length > 0 && (
         <div className="mb-5">
           <h3 className="text-sm font-semibold text-text-primary mb-2">
             {t('wizard.subAccountTitle')}
