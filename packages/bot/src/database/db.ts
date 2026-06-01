@@ -79,6 +79,10 @@ export interface GridBot {
   grvt_sub_account_id?: number | null;
   // GRVT network for this bot. Existing/legacy rows default to testnet.
   grvt_network?: 'testnet' | 'mainnet';
+  // Exchange: 'grvt' (USDT pairs, EIP-712 auth) or 'binance' (USDC pairs, HMAC auth).
+  // Existing/legacy rows default to 'grvt'. This field determines which
+  // exchange client the grid engine uses for this bot.
+  exchange?: 'grvt' | 'binance';
 }
 
 export interface GridLevel {
@@ -385,6 +389,9 @@ export class GridBotDB {
       // keep referential integrity.
       'grvt_sub_account_id INTEGER',
       "grvt_network TEXT DEFAULT 'testnet'",
+      // Exchange: 'grvt' (USDT pairs) or 'binance' (USDC pairs).
+      // All existing bots default to 'grvt' (GRVT was the only exchange).
+      "exchange TEXT DEFAULT 'grvt'",
     ]) {
       try { await this.dbRun(`ALTER TABLE grid_bots ADD COLUMN ${col}`); } catch (e) { /* exists */ }
     }
@@ -864,6 +871,7 @@ export class GridBotDB {
       params.active_window_size ?? null,
       params.grvt_sub_account_id ?? null,
       params.grvt_network ?? 'testnet',
+      params.exchange ?? 'grvt',
     ];
     const sql = `
       INSERT INTO grid_bots (
@@ -872,8 +880,9 @@ export class GridBotDB {
         investment_usdt, original_investment_usdt, quantity_per_level,
         grid_profit_usdt, trend_pnl_usdt, total_pnl_usdt,
         status, position_size, avg_entry_price, liquidation_price, params_json,
-        virtual_enabled, active_window_size, grvt_sub_account_id, grvt_network
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        virtual_enabled, active_window_size, grvt_sub_account_id, grvt_network,
+        exchange
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     await this.dbRun(sql, values);

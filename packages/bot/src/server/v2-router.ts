@@ -72,6 +72,9 @@ interface EngineOps {
     // H.5: optional sub-account routing. NULL = use default creds.
     grvtSubAccountId?: number | null;
     grvtNetwork?: GrvtNetwork;
+    // Exchange: 'grvt' (USDT pairs) or 'binance' (USDC pairs).
+    // Defaults to 'grvt'.
+    exchange?: 'grvt' | 'binance';
   }): Promise<number>;
   startBot(botId: number): Promise<void>;
   pauseBot(botId: number): Promise<void>;
@@ -1727,6 +1730,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       investment_usdt: number;
       leverage: number;
       grvt_network: GrvtNetwork;
+      exchange: string;
     }>;
 
     const errors: string[] = [];
@@ -1734,6 +1738,10 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     if (!pair) errors.push('pair is required');
     const direction = body.direction === 'short' ? 'short' : 'long';
     const grvtNetwork: GrvtNetwork = body.grvt_network === 'mainnet' ? 'mainnet' : 'testnet';
+    // Exchange: 'grvt' (USDT pairs) or 'binance' (USDC pairs).
+    // Defaults to 'grvt'.
+    const exchange: 'grvt' | 'binance' =
+      body.exchange === 'binance' ? 'binance' : 'grvt';
     const lower = Number(body.lower_price);
     const upper = Number(body.upper_price);
     const grids = Number(body.num_grids);
@@ -1807,6 +1815,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       pair,
       direction,
       grvt_network: grvtNetwork,
+      exchange,
       input: { lower, upper, grids, investment, leverage },
       computed: {
         spacing: round(spacing, 4),
@@ -1853,6 +1862,8 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       active_window_size: number;
       // H.5: optional sub-account routing. Null/missing = default creds.
       grvt_sub_account_id: number | null;
+      // Exchange: 'grvt' (USDT pairs) or 'binance' (USDC pairs).
+      exchange: string;
     }>;
 
     const errors: string[] = [];
@@ -1860,6 +1871,10 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     if (!pair) errors.push('pair is required');
     const direction = body.direction === 'short' ? 'short' : 'long';
     const grvtNetwork: GrvtNetwork = body.grvt_network === 'mainnet' ? 'mainnet' : 'testnet';
+    // Exchange: 'grvt' (USDT pairs) or 'binance' (USDC pairs).
+    // Defaults to 'grvt'.
+    const exchange: 'grvt' | 'binance' =
+      body.exchange === 'binance' ? 'binance' : 'grvt';
     const lower = Number(body.lower_price);
     const upper = Number(body.upper_price);
     const grids = Number(body.num_grids);
@@ -1969,8 +1984,9 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
         activeWindowSize: virtualEnabled ? activeWindowSize : undefined,
         grvtSubAccountId,
         grvtNetwork,
+        exchange,
       });
-      log.info({ botId, userId, pair, direction, leverage, grids, grvtNetwork }, 'bot created (paused)');
+      log.info({ botId, userId, pair, direction, leverage, grids, grvtNetwork, exchange }, 'bot created (paused)');
 
       // Persist per-bot risk acceptance if the dashboard sent the
       // exact text + version it showed. The text is hashed and the

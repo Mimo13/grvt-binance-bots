@@ -3,6 +3,8 @@
 
 import { grvtClient, type GRVTClient, getInstrumentSpec, type GrvtNetwork } from '../api/client.js';
 import { getGrvtClientForBot, invalidateGrvtClient } from '../api/grvt-client-factory.js';
+import { getExchangeClient, invalidateExchangeClient } from '../api/exchange-client-factory.js';
+import type { IExchangeClient } from '../api/exchange-client.interface.js';
 import { db } from '../database/db.js';
 import type { GridBot, GridLevel, OrderRecord } from '../database/db.js';
 import { childLogger } from '../server/logger.js';
@@ -24,7 +26,7 @@ export interface GridConfig {
   numGrids: number;
   investmentUSDT: number;
   // H.8: Virtual grids. When true, bot keeps only `activeWindowSize` levels
-  // closest to market as real orders on GRVT; the rest are virtual (in DB
+  // closest to market as real orders on exchange; the rest are virtual (in DB
   // only). Rotation happens automatically as price moves.
   virtualEnabled?: boolean;
   activeWindowSize?: number;
@@ -32,6 +34,8 @@ export interface GridConfig {
   // = use the user's default credentials in grvt_credentials.
   grvtSubAccountId?: number | null;
   grvtNetwork?: GrvtNetwork;
+  // Exchange: 'grvt' (USDT pairs) or 'binance' (USDC pairs). Defaults to 'grvt'.
+  exchange?: 'grvt' | 'binance';
 }
 
 export interface GridCalculation {
@@ -414,11 +418,19 @@ export class GridEngine extends EventEmitter {
   }
 
   /**
-   * Resolve the GRVT client that should serve this bot. Multi-tenant:
-   * if the bot has a user_id, look up that user's encrypted credentials
-   * via the factory. Fall back to the module-level singleton (env vars)
-   * for legacy bots with no user_id — this keeps bot 44 (owner) working
-   * under the legacy env-var path while new bots route to their owner.
+   * Resolve the exchange client that should serve this bot.
+   *
+   * For 'grvt' bots: routes through getGrvtClientForBot (per-user encrypted
+   * creds from DB) with fallback to singleton grvtClient from env vars.
+   *
+   * For 'binance' bots: uses getExchangeClient('binance') which reads
+   * BINANCE_API_KEY + BINANCE_API_SECRET from env (no login, no DB creds).
+   *
+   * Returns unknown — caller must cast to the concrete type it needs.
+   * This is intentional: the engine uses IExchangeClient for routing decisions
+   * (all exchange-agnostic calls work fine) but the GRVT client has additional
+   * members (subAccountId, EventEmitter) that the engine also uses. Binance
+   * doesn't have these, so they live on the concrete type only.
    *
    * The factory has its own LRU cache, so calling this on every tick is
    * cheap after the first resolve.
@@ -427,10 +439,19 @@ export class GridEngine extends EventEmitter {
     bot: {
       id?: number;
       user_id?: number | null | undefined;
+      exchange?: string | null;
       grvt_sub_account_id?: number | null;
       grvt_network?: GrvtNetwork | null;
     }
-  ): Promise<GRVTClient> {
+  ): Promise<unknown> {
+    const exchange = bot.exchange ?? 'grvt';
+
+    // Binance: credentials from env vars (no multi-tenant DB routing)
+    if (exchange === 'binance') {
+      return getExchangeClient('binance');
+    }
+
+    // GRVT: per-user credentials with env fallback for legacy bots
     if (bot.user_id != null) {
       try {
         return await getGrvtClientForBot(
@@ -440,9 +461,6 @@ export class GridEngine extends EventEmitter {
           bot.grvt_network ?? 'testnet'
         );
       } catch (err) {
-        // Legacy/single-operator deployments intentionally use the singleton
-        // GRVT client from .env. Do not warn every monitor tick when a bot has
-        // a user_id but no per-user encrypted credentials configured.
         log.debug(
           `Per-user GRVT client unavailable for user ${bot.user_id} (bot ${bot.id ?? '?'}): ${(err as Error).message}. Falling back to singleton.`
         );

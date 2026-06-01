@@ -1,4 +1,4 @@
-# GRVT Grid — self-host stack.
+# GRVT-Binance Grid Bots — self-host stack.
 #
 # What this stack runs:
 #   - bot:      the trading engine + dashboard backend (Express + WS) + SPA
@@ -7,9 +7,9 @@
 #               but recommended if you point a domain at this host)
 #
 # Usage:
-#   1. cp .env.example .env  &&  edit .env with your GRVT API keys
+#   1. cp .env.example .env  &&  edit .env with your GRVT + Binance API keys
 #   2. docker compose up -d
-#   3. open https://your-domain/dashboard/  (or http://localhost:3848/dashboard/
+#   3. open http://localhost:3849/dashboard/  (or https://your-domain/dashboard/
 #      if you skip caddy by using the `--profile no-tls` flag)
 #
 # Data persistence:
@@ -19,7 +19,7 @@
 #
 # Stopping safely: `docker compose stop bot` sends SIGTERM, which the bot
 # catches and uses to gracefully cancel its monitoring loop while leaving
-# all GRVT open orders intact. Same as systemctl stop on the VPS.
+# all exchange open orders intact. Same as systemctl stop on the VPS.
 
 services:
   bot:
@@ -30,15 +30,15 @@ services:
         # Vite bakes VITE_* values into the dashboard bundle at build time.
         # Reuse the runtime dashboard key so WebSocket/API auth works after rebuilds.
         VITE_DASHBOARD_API_KEY: "${DASHBOARD_API_KEY}"
-    image: grvt-grid/bot:latest
-    container_name: grvt-grid-bot
+    image: grvt-binance/bot:latest
+    container_name: grvt-binance-bot
     restart: unless-stopped
     stop_signal: SIGTERM
     stop_grace_period: 30s
     env_file: .env
     environment:
       NODE_ENV: production
-      DASHBOARD_PORT: "3848"
+      DASHBOARD_PORT: "3849"
       LOG_LEVEL: "${LOG_LEVEL:-info}"
     volumes:
       - ./data:/app/data
@@ -46,63 +46,38 @@ services:
     ports:
       # Direct port for `--profile no-tls` deployments. With caddy, you can
       # remove this binding so only caddy is reachable from the internet.
-      - "${BOT_PORT:-3848}:3848"
-    healthcheck:
-      test: ["CMD", "curl", "-fs", "http://127.0.0.1:3848/api/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
+      - "${BOT_PORT:-3849}:3849"
+    profiles:
+      - no-tls  # docker compose --profile no-tls
 
   notifier:
     build:
       context: .
       dockerfile: packages/notifier/Dockerfile
-    image: grvt-grid/notifier:latest
-    container_name: grvt-grid-notifier
+    image: grvt-binance/notifier:latest
+    container_name: grvt-binance-notifier
     restart: unless-stopped
-    stop_signal: SIGTERM
-    stop_grace_period: 10s
     env_file: .env
-    environment:
-      NODE_ENV: production
-      GRID_BOT_DB: /shared-data/grid_bot.db
-      NOTIFIER_STATE_DIR: /var/lib/grvt-grid-notifier
-      LOG_LEVEL: "${LOG_LEVEL:-info}"
-      NOTIFIER_HEALTH_PORT: "3849"
     volumes:
-      # READ-ONLY mount of the bot's data dir — defense in depth.
-      - ./data:/shared-data:ro
-      - notifier-state:/var/lib/grvt-grid-notifier
+      - ./data:/app/data
       - ./logs/notifier:/app/logs
-    depends_on:
-      bot:
-        condition: service_started
-    healthcheck:
-      test: ["CMD", "curl", "-fs", "http://127.0.0.1:3849/"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    profiles: ["full", "with-notifier"]
+    profiles:
+      - notifier
 
   caddy:
-    image: caddy:2-alpine
-    container_name: grvt-grid-caddy
+    image: caddy:3-alpine
+    container_name: grvt-binance-caddy
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    depends_on:
-      bot:
-        condition: service_healthy
-    profiles: ["full", "with-tls"]
+      - ./caddy-data:/data
+      - ./caddy-config:/config
+    profiles:
+      - caddy  # docker compose --profile caddy
 
 volumes:
-  notifier-state:
   caddy-data:
   caddy-config:
