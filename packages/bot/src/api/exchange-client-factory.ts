@@ -15,10 +15,10 @@
 // It is for the no-login single-user mode. For multi-user, each user has their
 // own encrypted credentials in the DB (see grvt-client-factory.ts).
 
-import { GRVTClient } from './client.js';
+import { grvtClient } from './client.js';
 import { BinanceClient } from './binance-client.js';
 import type { IExchangeClient } from './exchange-client.interface.js';
-import type { GrvtNetwork } from './client.js';
+
 
 export type ExchangeId = 'grvt' | 'binance';
 
@@ -30,7 +30,7 @@ interface CacheEntry {
 const cache = new Map<ExchangeId, CacheEntry>();
 const TTL_MS = 5 * 60 * 1000;
 
-function cacheKey(exchange: ExchangeId): string {
+function cacheKey(exchange: ExchangeId): ExchangeId {
   return exchange;
 }
 
@@ -51,8 +51,10 @@ export function getExchangeClient(exchange: ExchangeId): IExchangeClient {
     const network = (process.env.BINANCE_ENV === 'mainnet' ? 'mainnet' : 'testnet');
     client = new BinanceClient(network);
   } else {
-    const network = (process.env.GRVT_ENV === 'mainnet' ? 'mainnet' : 'testnet') as GrvtNetwork;
-    client = new GRVTClient(network);
+    // GRVT still uses the existing concrete singleton. A proper
+    // GrvtExchangeAdapter is tracked in Kanban; this cast keeps the factory
+    // compiling while the engine is refactored to consume normalized shapes.
+    client = grvtClient as unknown as IExchangeClient;
   }
 
   cache.set(key, { client, expiresAt: Date.now() + TTL_MS });

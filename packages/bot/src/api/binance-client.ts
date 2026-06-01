@@ -1,11 +1,11 @@
-// BinanceClient — IExchangeClient implementation for Binance USDⓈ-Margined Futures
+// BinanceClient — IExchangeClient implementation for Binance Spot/Testnet
 //
 // Auth: HMAC-SHA256 signed requests (API key + secret from env).
-// Network: BINANCE_ENV=testnet → testnet.binance.vision, mainnet → fapi.binance.com
+// Network: BINANCE_ENV=testnet → testnet.binance.vision, mainnet → api.binance.com
 // Symbols stored in DB as Binance-native: "BTCUSDC", "ETHUSDC", etc.
 //
-// WebSocket: raw wss://fstream.binance.com/ws/<symbol>@ticker (public)
-//            Account updates via listenKey (requires signed POST /fapi/v1/listenKey)
+// WebSocket: raw spot streams wss://stream.binance.com:9443/ws/<symbol>@ticker
+//            Account updates via listenKey (requires signed POST /api/v3/userDataStream)
 
 import crypto from 'crypto';
 import WebSocket from 'ws';
@@ -31,9 +31,9 @@ function getBinanceConfig(): BinanceConfig {
 }
 
 const BASE_URL_TESTNET = 'https://testnet.binance.vision';
-const BASE_URL_MAINNET = 'https://fapi.binance.com';
+const BASE_URL_MAINNET = 'https://api.binance.com';
 const WS_URL_TESTNET = 'wss://testnet.binance.vision/ws';
-const WS_URL_MAINNET = 'wss://fstream.binance.com/ws';
+const WS_URL_MAINNET = 'wss://stream.binance.com:9443/ws';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -46,26 +46,26 @@ function wsUrl(network: ExchangeNetwork): string {
 }
 
 function hmacSign(params: Record<string, string | number>, secret: string): string {
-  const queryString = new URLSearchParams(
-    Object.entries(params).map(([k, v]) => [k, String(v)])
-  ).toString();
+  const queryString = toSearchParams(params).toString();
   return crypto.createHmac('sha256', secret).update(queryString).digest('hex');
+}
+
+function toSearchParams(params: Record<string, string | number>): URLSearchParams {
+  return new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)] as [string, string]));
 }
 
 async function signedRequest(
   config: BinanceConfig,
-  method: 'GET' | 'POST' | 'DELETE',
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   endpoint: string,
   params: Record<string, string | number> = {}
 ): Promise<unknown> {
   const timestamp = Date.now();
   const allParams = { ...params, timestamp };
   const signature = hmacSign(allParams, config.apiSecret);
-  const url = `${baseUrl(config.network)}${endpoint}?${new URLSearchParams(
-    Object.entries({ ...allParams, signature }).map(([k, v]) => [k, String(v)])
-  ).toString()}`;
+  const url = `${baseUrl(config.network)}${endpoint}?${toSearchParams({ ...allParams, signature }).toString()}`;
 
-  const fetch = (await import('undici')).default;
+  const { fetch } = await import('undici');
   const resp = await fetch(url, {
     method,
     headers: { 'X-MBX-APIKEY': config.apiKey },
@@ -82,10 +82,9 @@ async function publicRequest<T>(
   endpoint: string,
   params: Record<string, string | number> = {}
 ): Promise<T> {
-  const url = `${baseUrl(network)}${endpoint}?${new URLSearchParams(
-    Object.entries(params).map(([k, v]) => [k, String(v)])
-  ).toString()}`;
-  const fetch = (await import('undici')).default;
+  const qs = toSearchParams(params).toString();
+  const url = `${baseUrl(network)}${endpoint}${qs ? `?${qs}` : ''}`;
+  const { fetch } = await import('undici');
   const resp = await fetch(url);
   return resp.json() as Promise<T>;
 }
@@ -144,12 +143,12 @@ export class BinanceClient implements IExchangeClient {
       const sym = String(msg.s);
       const cbSet = this._tickerCbs.get(sym);
       if (!cbSet || cbSet.size === 0) return;
-      const ticker = this._wsTickerToTicker(msg as Ws24hrTicker);
+      const ticker = this._wsTickerToTicker(msg as unknown as Ws24hrTicker);
       cbSet.forEach(cb => cb(ticker));
     }
     // Account update (listenKey stream)
     if (msg.e === 'ORDER_TRADE_UPDATE') {
-      const data = msg as WsOrderUpdate;
+      const data = msg as unknown as WsOrderUpdate;
       const sym = data.s;
       const cbSet = this._orderCbs.get(sym);
       if (!cbSet || cbSet.size === 0) return;
@@ -199,32 +198,32 @@ export class BinanceClient implements IExchangeClient {
   async getInstruments(): Promise<Instrument[]> {
     const data = await publicRequest<ExchangeInfoResponse>(
       this.network,
-      '/fapi/v1/exchangeInfo'
+      '/api/v3/exchangeInfo'
     );
     return (data.symbols || [])
-      .filter((s: ExchangeSymbol) => s.contractType === 'PERPETUAL' && s.status === 'TRADING')
+      .filter((s: ExchangeSymbol) => s.status === 'TRADING' && s.isSpotTradingAllowed !== false)
       .map((s: ExchangeSymbol) => ({
         symbol: s.symbol,
         baseCurrency: s.baseAsset,
         quoteCurrency: s.quoteAsset,
-        tickSize: s.pricePrecision,
-        lotSize: s.quantityPrecision,
-        maxLeverage: parseInt(s.leverageBracket?.slice(-1)?.[1] || '125', 10),
-        contractType: 'perpetual' as const,
+        tickSize: getFilterValue(s.filters, 'PRICE_FILTER', 'tickSize') ?? '0',
+        lotSize: getFilterValue(s.filters, 'LOT_SIZE', 'stepSize') ?? '0',
+        maxLeverage: 1,
+        contractType: 'spot' as const,
       }));
   }
 
   async getTicker(symbol: string): Promise<Ticker> {
     const data = await publicRequest<Ws24hrTicker>(
       this.network,
-      '/fapi/v1/ticker/24hr',
+      '/api/v3/ticker/24hr',
       { symbol }
     );
     return this._wsTickerToTicker(data);
   }
 
   async getKlines(symbol: string, interval: string, limit = 100): Promise<Kline[]> {
-    const raw = await publicRequest<RawKline[]>(this.network, '/fapi/v1/klines', {
+    const raw = await publicRequest<RawKline[]>(this.network, '/api/v3/klines', {
       symbol,
       interval,
       limit,
@@ -242,34 +241,21 @@ export class BinanceClient implements IExchangeClient {
   }
 
   async getBalance(): Promise<Balance> {
-    const data = await signedRequest(this.config, 'GET', '/fapi/v3/account', {});
-    const usdcAsset = (data.assets as BinanceAsset[])?.find(a => a.asset === 'USDC');
+    const data = await signedRequest(this.config, 'GET', '/api/v3/account', {}) as { balances?: BinanceAsset[] };
+    const usdcAsset = data.balances?.find(a => a.asset === 'USDC');
     return {
-      totalEquity: usdcAsset?.walletBalance || '0',
-      availableBalance: usdcAsset?.availableBalance || '0',
-      marginUsed: usdcAsset?.maintMargin || '0',
-      maintenanceMargin: usdcAsset?.maintMargin || '0',
-      initialMargin: usdcAsset?.initialMargin || '0',
+      totalEquity: usdcAsset ? String(Number(usdcAsset.free || '0') + Number(usdcAsset.locked || '0')) : '0',
+      availableBalance: usdcAsset?.free || '0',
+      marginUsed: '0',
+      maintenanceMargin: '0',
+      initialMargin: '0',
       currency: 'USDC',
     };
   }
 
   async getPosition(symbol: string): Promise<Position | null> {
-    const data = await signedRequest(this.config, 'GET', '/fapi/v3/positionRisk', { pair: symbol });
-    const pos = (data as BinancePosition[])?.find(p => p.symbol === symbol);
-    if (!pos || parseFloat(pos.positionAmt || '0') === 0) return null;
-    return {
-      symbol: pos.symbol,
-      size: pos.positionAmt,
-      notional: pos.notionalValue,
-      entryPrice: pos.entryPrice,
-      markPrice: pos.markPrice,
-      unrealizedPnl: pos.unRealizedProfit,
-      side: parseFloat(pos.positionAmt) > 0 ? 'long' : 'short',
-      leverage: pos.leverage,
-      liquidationPrice: pos.liquidationPrice,
-      marginUsed: pos.isolatedMargin || pos.maintMargin || '0',
-    };
+    void symbol;
+    return null;
   }
 
   async createOrder(params: CreateOrderParams): Promise<Order> {
@@ -285,7 +271,7 @@ export class BinanceClient implements IExchangeClient {
     if (params.postOnly) reqParams.icebergQty = params.quantity;
     if (params.clientOrderId) reqParams.newClientOrderId = params.clientOrderId;
 
-    const data = await signedRequest(this.config, 'POST', '/fapi/v3/order', reqParams);
+    const data = await signedRequest(this.config, 'POST', '/api/v3/order', reqParams);
     const o = data as BinanceOrder;
     return {
       orderId: String(o.orderId),
@@ -304,7 +290,7 @@ export class BinanceClient implements IExchangeClient {
   }
 
   async cancelOrder(orderId: string, symbol: string): Promise<void> {
-    await signedRequest(this.config, 'DELETE', '/fapi/v3/order', {
+    await signedRequest(this.config, 'DELETE', '/api/v3/order', {
       symbol,
       orderId: parseInt(orderId, 10),
     });
@@ -313,7 +299,7 @@ export class BinanceClient implements IExchangeClient {
   async getOpenOrders(symbol?: string): Promise<Order[]> {
     const params: Record<string, string | number> = {};
     if (symbol) params.symbol = symbol;
-    const data = await signedRequest(this.config, 'GET', '/fapi/v3/openOrders', params);
+    const data = await signedRequest(this.config, 'GET', '/api/v3/openOrders', params);
     return (data as BinanceOrder[]).map(o => ({
       orderId: String(o.orderId),
       symbol: o.symbol,
@@ -333,7 +319,7 @@ export class BinanceClient implements IExchangeClient {
   async getFillHistory(symbol?: string, limit = 50): Promise<Fill[]> {
     const params: Record<string, string | number> = { limit };
     if (symbol) params.symbol = symbol;
-    const data = await signedRequest(this.config, 'GET', '/fapi/v1/userTrades', params);
+    const data = await signedRequest(this.config, 'GET', '/api/v3/myTrades', params);
     return (data as BinanceTrade[]).map(t => ({
       fillId: String(t.id),
       orderId: String(t.orderId),
@@ -367,7 +353,7 @@ export class BinanceClient implements IExchangeClient {
   private async _initListenKey(symbol: string): Promise<void> {
     if (this._listenKey) return; // reuse existing listenKey for all symbols
     try {
-      const data = await signedRequest(this.config, 'POST', '/fapi/v1/listenKey', {});
+      const data = await signedRequest(this.config, 'POST', '/api/v3/userDataStream', {});
       this._listenKey = (data as { listenKey: string }).listenKey;
       const ws = new WebSocket(`${wsUrl(this.network)}/${this._listenKey}`);
       ws.on('message', (raw: WebSocket.Data) => {
@@ -376,7 +362,7 @@ export class BinanceClient implements IExchangeClient {
       // Ping every 30min to keep listenKey alive
       this._listenKeyTimer = setInterval(async () => {
         try {
-          await signedRequest(this.config, 'PUT', '/fapi/v1/listenKey', {});
+          await signedRequest(this.config, 'PUT', '/api/v3/userDataStream', {});
         } catch { /* ignore */ }
       }, 30 * 60 * 1000);
     } catch (err) {
@@ -390,7 +376,7 @@ export class BinanceClient implements IExchangeClient {
 
   unsubscribeOrders(symbol: string): void {
     const cbSet = this._orderCbs.get(symbol);
-    if (cbSet) { cbSet.delete; this._orderCbs.delete(symbol); }
+    if (cbSet) { this._orderCbs.delete(symbol); }
   }
 
   disconnect(): void {
@@ -432,12 +418,16 @@ interface ExchangeInfoResponse {
 }
 interface ExchangeSymbol {
   symbol: string; baseAsset: string; quoteAsset: string;
-  pricePrecision: string; quantityPrecision: string;
-  status: string; contractType: string;
-  leverageBracket?: [string, string][];
+  pricePrecision?: number; quantityPrecision?: number;
+  status: string; isSpotTradingAllowed?: boolean;
+  filters?: BinanceFilter[];
 }
 type RawKline = [number, string, string, string, string, string, number];
-interface BinanceAsset { asset: string; walletBalance: string; availableBalance: string; maitananceMargin?: string; initialMargin?: string; maintMargin?: string; }
-interface BinancePosition { symbol: string; positionAmt: string; notionalValue?: string; entryPrice: string; markPrice: string; unRealizedProfit: string; leverage: string; liquidationPrice: string; isolatedMargin?: string; }
+interface BinanceAsset { asset: string; free: string; locked: string; }
 interface BinanceOrder { orderId: number; symbol: string; side: string; type: string; origQty: string; executedQty: string; price: string; status: string; timeInForce: string; transactTime: number; time: number; updateTime: number; clientOrderId?: string; }
 interface BinanceTrade { id: number; orderId: number; symbol: string; side: string; qty: string; price: string; commission: string; commissionAsset: string; isMaker: boolean; time: number; }
+type BinanceFilter = { filterType: string } & Record<string, string>;
+
+function getFilterValue(filters: BinanceFilter[] | undefined, filterType: string, key: string): string | undefined {
+  return filters?.find((f) => f.filterType === filterType)?.[key];
+}

@@ -2,7 +2,7 @@
   "name": "@grvt-binance/grid",
   "version": "0.1.0",
   "private": true,
-  "description": "Self-hostable multi-user grid trading bot for GRVT and Binance perpetual futures, with real-time dashboard and Telegram alerts.",
+  "description": "Self-hostable multi-user grid trading bot for GRVT and Binance Spot/Testnet, with real-time dashboard and Telegram alerts.",
   "license": "AGPL-3.0-or-later",
   "homepage": "https://grvt-binance-bots.github.io",
   "repository": {

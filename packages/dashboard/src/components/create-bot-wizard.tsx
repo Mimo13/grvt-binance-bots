@@ -156,8 +156,9 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
     ? (instrumentsQuery.data.instruments as any[])
         .filter((i: any) => {
           if (state.exchange === 'binance') {
-            // Binance: USDC perpetual pairs, e.g. "BTCUSDC", "ETHUSDC"
-            return !!(i.symbol && i.quoteAsset === 'USDC' && i.contractType === 'PERPETUAL');
+            // Binance: USDC spot pairs, e.g. "BTCUSDC", "ETHUSDC".
+            // Backend returns normalized IExchangeClient.Instrument fields.
+            return !!(i.symbol && (i.quoteCurrency ?? i.quoteAsset) === 'USDC' && (i.contractType ?? '').toLowerCase() === 'spot');
           }
           // GRVT: USDT perpetual pairs, e.g. "BTC_USDT_Perp"
           return !!(i.instrument?.includes('_Perp') || i.symbol?.includes('_Perp'));

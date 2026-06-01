@@ -1152,7 +1152,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
   router.get('/instruments', asyncHandler(async (req, res) => {
     const rawNetwork = req.query.network;
     if (rawNetwork === 'binance') {
-      const { BinanceClient } = await import('../api/binance-client');
+      const { BinanceClient } = await import('../api/binance-client.js');
       const data = await cache.getOrFetch('instruments:binance', 60_000, () => new BinanceClient().getInstruments());
       res.json({ instruments: data });
       return;

@@ -794,3 +794,60 @@ No considerar Binance terminado hasta cumplir todo esto:
 La estrategia correcta no es seguir añadiendo features. Primero hay que cerrar la brecha entre arquitectura declarada y código ejecutable. El roadmap debe ir de estabilización → adapters reales → Binance MVP testnet → documentación verificada → refactor profundo.
 
 Si se hace así, el proyecto puede quedar sólido. Si se salta directo a 5.2/testnet ahora, se diagnosticarán errores de integración que TypeScript ya está avisando.
+
+---
+
+## 2026-06-01 — Estado real tras decidir Binance Spot/Testnet (no Futures)
+
+### Respuesta operativa guardada
+
+No. Está guardado y empujado, pero el proyecto no está listo para operar Binance todavía.
+
+Lo que sí está listo:
+- Repo GitHub actualizado.
+- roadmap.md creado y pusheado.
+- Dashboard compila.
+- Tests dashboard pasan: 45/45.
+- npm audit actual: 0 vulnerabilidades.
+- Decisión guardada en Engram: Binance Spot/Testnet, no Futures.
+- Review guardada en Engram.
+
+Lo que NO está listo:
+- Backend no compila: `npm run typecheck` falla con 50+ errores.
+- BinanceClient todavía mezcla Futures con Spot: usa `/fapi/*` pero apunta a `testnet.binance.vision`, que es Spot Testnet.
+- GridEngine sigue siendo GRVT-céntrico: usa `setLeverage`, `order_id` y `legs[0].limit_price`.
+- `exchange=binance` no se persiste todavía desde `GridEngine.createBot`.
+- El selector Binance del frontend probablemente queda vacío: frontend busca `quoteAsset` y `PERPETUAL`, backend/interface devuelve `quoteCurrency` y contractType normalizado.
+- No hay tests Binance específicos.
+- No se debe crear bot testnet aún.
+
+Con la confirmación de Mimo: “No quiero futures por ahora”, el camino queda claro.
+
+Primera tarea real:
+- Convertir BinanceClient y docs a Binance Spot Testnet puro.
+
+Después:
+1. Hacer que typecheck pase.
+2. Persistir `exchange=binance`.
+3. Crear adapters reales GRVT/Binance.
+4. Quitar lógica GRVT del engine común.
+5. Parsear filtros reales Binance:
+   - `PRICE_FILTER.tickSize`
+   - `LOT_SIZE.stepSize`
+   - `MIN_NOTIONAL` / `NOTIONAL`
+6. Añadir tests Binance.
+7. Solo entonces crear bot testnet.
+
+Respuesta corta:
+- No está todo listo para ejecutar bots, pero sí está listo el diagnóstico y la decisión clave. El siguiente bloque de trabajo debe ser estabilización backend + Spot Testnet, no testnet execution todavía.
+
+### Instrucción actual de Mimo
+
+> Guarda la respuesta anterior y esta en el fichero roadmap.md del proyecto y comienza con lo que falta hasta terminar o tener algún problema bloqueante.
+
+### Decisión de ejecución
+
+- Scope Binance: Spot/Testnet solamente. Futures queda fuera del MVP actual.
+- No usar endpoints `/fapi/*`, `positionRisk`, `setLeverage` ni streams futures para Binance en esta etapa.
+- Prioridad inmediata: hacer verde el backend typecheck y separar la ruta Binance Spot de los supuestos GRVT/Futures.
+

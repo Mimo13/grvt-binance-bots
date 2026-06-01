@@ -443,7 +443,7 @@ export class GridEngine extends EventEmitter {
       grvt_sub_account_id?: number | null;
       grvt_network?: GrvtNetwork | null;
     }
-  ): Promise<unknown> {
+  ): Promise<any> {
     const exchange = bot.exchange ?? 'grvt';
 
     // Binance: credentials from env vars (no multi-tenant DB routing)
@@ -736,6 +736,7 @@ export class GridEngine extends EventEmitter {
         active_window_size: activeWindowSize,
         grvt_sub_account_id: config.grvtSubAccountId ?? null,
         grvt_network: config.grvtNetwork ?? 'testnet',
+        exchange: config.exchange ?? 'grvt',
         params_json: JSON.stringify({
           spacing: calculation.spacing,
           quantityPerGrid: calculation.quantityPerGrid,
@@ -854,11 +855,11 @@ export class GridEngine extends EventEmitter {
         }
       };
 
-      const existingOrders = await fetchWithRetry(
+      const existingOrders = await fetchWithRetry<any[]>(
         'getOpenOrders',
         () => client.getOpenOrders(bot.pair)
       );
-      const existingPosition = await fetchWithRetry(
+      const existingPosition = await fetchWithRetry<any | null>(
         'getPosition',
         () => client.getPosition(bot.pair)
       );
@@ -1037,7 +1038,7 @@ export class GridEngine extends EventEmitter {
       // ⚠️ CRÍTICO: Consultar posición real de GRVT, NO usar DB
       log.info('📊 Consultando posición real en GRVT...');
       const positions = await client.getPositions();
-      const position = positions.find(p => p.instrument === bot.pair);
+      const position = positions.find((p: any) => p.instrument === bot.pair);
       const realPositionSize = position ? parseFloat(position.size) : 0;
 
       log.info(`📍 Posición real: ${realPositionSize} (DB: ${bot.position_size})`);
@@ -1445,7 +1446,7 @@ export class GridEngine extends EventEmitter {
             new Date(existingFunding[0]!.funding_time).getTime() : 0;
 
           // Filtrar nuevos payments
-          const newPayments = fundingPayments.filter(payment =>
+          const newPayments = fundingPayments.filter((payment: any) =>
             payment.funding_time * 1000 > lastFundingTime
           );
 
@@ -1513,7 +1514,7 @@ export class GridEngine extends EventEmitter {
           const botCreatedTime = new Date(bot.created_at).getTime();
 
           // Filtrar funding después de la creación del bot
-          const relevantFunding = allFunding.filter(payment =>
+          const relevantFunding = allFunding.filter((payment: any) =>
             payment.funding_time * 1000 >= botCreatedTime
           );
 
