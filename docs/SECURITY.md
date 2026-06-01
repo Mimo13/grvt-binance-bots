@@ -12,9 +12,11 @@
 ### Binance
 
 - **Authentication**: HMAC-SHA256. API key + secret are static — rotate them regularly.
-- **API Key Permissions**: Binance API keys can be restricted to read-only, spot trading, or futures trading. Grid bots require **futures trading** permission.
-- **IP Whitelisting**: Recommended to whitelist your server IP on the Binance API key. Without IP whitelist, any attacker with the API key can trade.
-- **Testnet vs Mainnet**: Testnet API keys are separate from mainnet. Do NOT use testnet keys in production.
+- **API Key Permissions**: Binance API keys can be restricted to read-only, spot trading, or futures trading. Grid bots require **spot trading** permission (we use Binance Spot, not Futures).
+- **IP Whitelisting**: Recommended to whitelist your server IP on the Binance API key. Without IP whitelist, any attacker with the key can trade.
+- **Testnet vs Mainnet**: Testnet API keys are separate from mainnet. Do NOT use testnet keys in production. Testnet keys can be regenerated at https://testnet.binance.vision.
+- **Per-Bot Capital Isolation**: Each Binance bot tracks its own USDC/token balance independently. sell_cap = min(bot_holdings) prevents overselling when multiple bots share one account. No wallet-wide balance is used for bot decisions.
+- **Variable naming**: The .env variable is `BINANCE_TESTNET_SECRET_KEY` (not `BINANCE_TESTNET_API_SECRET`). Mismatched names cause silent 401 errors.
 - **WebSocket Authentication**: Binance requires a signed "listen key" for account update streams. The `BinanceClient` must manage listen key lifecycle (ping every 30min to keep alive).
 
 ## General Security Practices

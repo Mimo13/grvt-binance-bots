@@ -73,14 +73,14 @@ Trading: `https://trades.testnet.grvt.io/full/v1`
 |-------------|----------|-------|
 | Testnet | `https://testnet.binance.vision/api/v3/` | No signature required for public |
 | Testnet WS | `wss://testnet.binance.vision/ws` | |
-| Spot Testnet | `https://testnet.binance.vision` | USDC-margined perpetual futures |
-| Mainnet | `https://fapi.binance.com` | USDC-margined perps |
-| Mainnet WS | `wss://fstream.binance.com/ws` | |
+| Spot Testnet | `https://testnet.binance.vision` | USDC-margined Spot |
+| Mainnet | `https://api.binance.com` | USDC-margined Spot |
+| Mainnet WS | `wss://stream.binance.com:9443/ws` | | |
 
-For grid bots (perpetual futures):
+For grid bots (Spot):
 
-- **Testnet**: `https://testnet.binance.vision/api/v3/` (fapi for futures)
-- **Mainnet**: `https://fapi.binance.com/api/v3/`
+- **Testnet**: `https://testnet.binance.vision/api/v3/`
+- **Mainnet**: `https://api.binance.com/api/v3/`
 
 ---
 
@@ -96,11 +96,11 @@ Note: Always USDT quote. No USDC pairs on GRVT.
 
 ### Binance
 
-Format: `{BASE}USDC` (for perpetual futures)
+Format: `{BASE}USDC` (for Spot trading)
 
-Examples: `BTCUSDC`, `ETHUSDC`, `XRPUSDC`
+Examples: `BTCUSDC`, `SOLUSDC`, `ETHUSDC`
 
-Note: Grid bots use USDC-margined perpetual futures on Binance (not USDT spot). Pairs are `{BASE}USDC`.
+Note: Grid bots use USDC-margined Spot pairs on Binance. Pairs are `{BASE}USDC`.
 
 **Symbol conversion**:
 - GRVT `BTC_USDT_Perp` → `BTCUSDT` on Binance Spot

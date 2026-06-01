@@ -1,15 +1,16 @@
 # GRVT-Binance Grid Bots
 
-**Self-hostable multi-exchange grid trading bot for GRVT and Binance perpetual futures.**
+**Self-hostable multi-exchange grid trading bot for GRVT perpetuals and Binance Spot.**
 
-Run grid trading strategies on both GRVT (USDT pairs) and Binance (USDC pairs) from a single dashboard. Same engine, same features, unified UI.
+Run grid trading strategies on both GRVT (USDT perps) and Binance Spot (USDC pairs) from a single dashboard. Same engine, same features, unified UI.
 
 ---
 
 ## Features
 
-- **Dual Exchange**: GRVT + Binance from one dashboard
+- **Dual Exchange**: GRVT perps + Binance Spot from one dashboard
 - **Grid Trading**: Configurable price range, number of grids, investment
+- **Per-Bot Capital Isolation**: Binance bots track USDC/token independently (no wallet-wide overspend)
 - **Virtual Grids**: Only active levels on exchange, rest virtual (reduced gas/maker fees)
 - **Compound Rebalance**: Automatically reinvest grid profits
 - **Stop-Loss / Take-Profit**: Per-bot safety thresholds
@@ -24,10 +25,10 @@ Run grid trading strategies on both GRVT (USDT pairs) and Binance (USDC pairs) f
 
 ## Supported Exchanges
 
-| Exchange | Quote | Testnet | Production |
-|----------|-------|---------|------------|
-| GRVT | USDT | ✅ | ✅ |
-| Binance | USDC | ✅ | ✅ |
+| Exchange | Type | Quote | Testnet | Production |
+|----------|------|-------|---------|------------|
+| GRVT | Perpetuals | USDT | ✅ | ✅ |
+| Binance | Spot | USDC | ✅ | ✅ |
 
 ---
 
@@ -66,6 +67,24 @@ open http://95.111.244.212:3848/dashboard/
 ```
 
 The dashboard opens with **All Bots** tab. Use the **GRVT** and **Binance** tabs to filter by exchange.
+
+### 4. Quick Start: Binance Spot Bot
+
+```bash
+# 1. Get testnet keys at https://testnet.binance.vision
+# 2. Fund with testnet USDC via the faucet
+# 3. Add to .env:
+#    BINANCE_ENV=testnet
+#    BINANCE_TESTNET_API_KEY=your_key
+#    BINANCE_TESTNET_SECRET_KEY=your_secret
+
+# 4. Create a SOLUSDC bot via dashboard or API:
+#    Exchange: Binance, Pair: SOLUSDC
+#    Range: $75-$90, Grids: 5, Investment: $50
+
+# 5. Verify on exchange:
+npx tsx packages/bot/tests/binance-smoke-test.ts
+```
 
 ---
 
@@ -165,7 +184,9 @@ grvt-binance-bots/
 | `BINANCE_TESTNET_API_KEY` | Binance testnet key | |
 | `BINANCE_TESTNET_SECRET_KEY` | Binance testnet secret | |
 | `DASHBOARD_API_KEY` | Dashboard auth key | |
-| `TRADING_MODE` | `paper`, `testnet`, or `live` | `paper` |
+| `TRADING_MODE` | `paper`, `testnet`, or `live` | `testnet` |
+
+> **Note**: Binance testnet keys are generated at https://testnet.binance.vision. Testnet USDC is available via the faucet on the same site. The variable name is `BINANCE_TESTNET_SECRET_KEY` (not `BINANCE_TESTNET_API_SECRET`).
 
 ---
 
