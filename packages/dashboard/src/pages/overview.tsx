@@ -55,6 +55,10 @@ export function OverviewPage() {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardPreset, setWizardPreset] = useState<WizardPreset | undefined>();
 
+  // Filter state: 'all' | 'grvt' | 'binance'
+  // MUST be declared before early returns so hook count stays consistent.
+  const [exchangeFilter, setExchangeFilter] = useState<'all' | 'grvt' | 'binance'>('all');
+
   // E.2: listen for keyboard shortcut `n b` dispatched from AppShell
   useEffect(() => {
     const handler = () => {
@@ -118,9 +122,6 @@ export function OverviewPage() {
   const avgLeverage = summary?.avgLeverage ?? 0;
   const pairExposure = summary?.pairExposure ?? {};
   const runningCount = summary?.runningCount ?? bots.filter((b) => b.status === 'running').length;
-
-  // Filter state: 'all' | 'grvt' | 'binance'
-  const [exchangeFilter, setExchangeFilter] = useState<'all' | 'grvt' | 'binance'>('all');
 
   // Filter bots by exchange
   const filteredBots = exchangeFilter === 'all'

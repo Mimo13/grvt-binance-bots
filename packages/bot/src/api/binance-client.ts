@@ -11,6 +11,22 @@ import crypto from 'crypto';
 import WebSocket from 'ws';
 import { IExchangeClient, type Instrument, type Ticker, type Kline, type Balance, type Position, type CreateOrderParams, type Order, type Fill, type OrderUpdate, type ExchangeNetwork } from './exchange-client.interface.js';
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Round a numeric quantity to conform to Binance's LOT_SIZE stepSize.
+ * E.g. roundToStepSize(106.14, "1") => "106", roundToStepSize(0.156, "0.1") => "0.2"
+ */
+function roundToStepSize(value: number, stepSize: string): string {
+  const step = parseFloat(stepSize);
+  if (!step || step <= 0) return String(value);
+  const rounded = Math.round(value / step) * step;
+  // Preserve decimal places matching stepSize precision
+  const dotIdx = stepSize.indexOf('.');
+  const decimals = dotIdx >= 0 ? stepSize.length - dotIdx - 1 : 0;
+  return rounded.toFixed(decimals);
+}
+
 // ─── Config ─────────────────────────────────────────────────────────────────
 
 interface BinanceConfig {
@@ -115,6 +131,8 @@ export class BinanceClient implements IExchangeClient {
   private readonly _orderCbs = new Map<string, Set<(o: OrderUpdate) => void>>();
   private _listenKey: string | null = null;
   private _listenKeyTimer: ReturnType<typeof setInterval> | null = null;
+  // Cache of LOT_SIZE stepSize per symbol, populated lazily from exchangeInfo.
+  private _lotSizeCache = new Map<string, string>();
 
   constructor(network: ExchangeNetwork = 'testnet') {
     this.network = network;
@@ -272,17 +290,47 @@ export class BinanceClient implements IExchangeClient {
     return null;
   }
 
+  /**
+   * Fetch LOT_SIZE stepSize for a symbol from exchangeInfo, caching the result.
+   * Falls back to "0.01" if the call fails or the symbol is not found.
+   */
+  private async _getLotStepSize(symbol: string): Promise<string> {
+    const cached = this._lotSizeCache.get(symbol);
+    if (cached !== undefined) return cached;
+
+    try {
+      const data = await publicRequest<{ symbols: Array<{ symbol: string; filters: Array<{ filterType: string; stepSize?: string }> }> }>(
+        this.network,
+        '/api/v3/exchangeInfo',
+        { symbol }
+      );
+      const sym = data.symbols?.[0];
+      const stepSize = sym?.filters?.find(f => f.filterType === 'LOT_SIZE')?.stepSize ?? '0.01';
+      this._lotSizeCache.set(symbol, stepSize);
+      return stepSize;
+    } catch {
+      // Default safe value if exchangeInfo fails
+      this._lotSizeCache.set(symbol, '0.01');
+      return '0.01';
+    }
+  }
+
   async createOrder(params: CreateOrderParams): Promise<Order> {
+    // Round quantity to LOT_SIZE stepSize before sending to avoid
+    // Binance API error -1013: Filter failure: LOT_SIZE.
+    const stepSize = await this._getLotStepSize(params.symbol);
+    const roundedQty = roundToStepSize(parseFloat(params.quantity), stepSize);
+
     const reqParams: Record<string, string | number> = {
       symbol: params.symbol,
       side: params.side.toUpperCase(),
       type: params.type.toUpperCase(),
-      quantity: params.quantity,
+      quantity: roundedQty,
       newOrderRespType: 'RESULT',
     };
     if (params.price) reqParams.price = params.price;
     if (params.timeInForce) reqParams.timeInForce = params.timeInForce.toUpperCase();
-    if (params.postOnly) reqParams.icebergQty = params.quantity;
+    if (params.postOnly) reqParams.icebergQty = roundedQty;
     if (params.clientOrderId) reqParams.newClientOrderId = params.clientOrderId;
 
     const data = await signedRequest(this.config, 'POST', '/api/v3/order', reqParams);

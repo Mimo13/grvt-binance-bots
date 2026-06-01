@@ -105,10 +105,11 @@ class WsClient {
         this.setStatus('closed');
         return;
       }
-      // 4401 = unauthorized, don't retry blindly
+      // 4401 = unauthorized, don't retry blindly. Treat as closed
+      // so the header shows "Offline" instead of a scary red "Error".
       if (event.code === 4401) {
-        console.error('[ws] unauthorized — check VITE_DASHBOARD_API_KEY');
-        this.setStatus('error');
+        console.info('[ws] unauthorized — running in REST-only mode');
+        this.setStatus('closed');
         return;
       }
       this.setStatus('closed');

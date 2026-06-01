@@ -301,13 +301,15 @@ export const api = {
   getCandles: (
     pair: string,
     interval: CandleInterval = 'CI_1_H',
-    limit = 500
+    limit = 500,
+    exchange?: 'grvt' | 'binance'
   ) => {
     const qs = new URLSearchParams({
       pair,
       interval,
       limit: String(limit),
     });
+    if (exchange) qs.set('exchange', exchange);
     return request<{ pair: string; interval: string; candles: Candle[] }>(
       `/candles?${qs.toString()}`
     );

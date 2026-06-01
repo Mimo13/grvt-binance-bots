@@ -1170,11 +1170,12 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
   }));
 
   // ── GET /api/v2/candles ───────────────────────────────────────────
-  // Proxy to GRVT klines for the GridChart.
+  // Proxy to GRVT or Binance klines for the GridChart.
   // Query params:
   //   pair      - instrument name (default: ETH_USDT_Perp)
   //   interval  - GRVT enum (default: CI_1_H). Whitelisted to a few common ones.
   //   limit     - max candles, capped at 1000
+  //   exchange  - 'binance' or omitted (default: grvt)
   // Cached 30s for 1H+, 5s for sub-hour intervals.
   // Returns ascending (oldest first) — the GRVT API returns newest first;
   // we reverse so Lightweight Charts can append in order.
@@ -1183,6 +1184,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     const interval = String(req.query.interval ?? 'CI_1_H');
     const limitRaw = parseInt(String(req.query.limit ?? '500'), 10);
     const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 500, 10), 1000);
+    const exchange = String(req.query.exchange ?? 'grvt');
 
     // Whitelist intervals — anything else is rejected to keep the cache key
     // space bounded and prevent typos from spawning a new cache entry per req.
@@ -1198,10 +1200,26 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       });
     }
 
+    // Map GRVT intervals to Binance intervals when fetching from Binance.
+    const GRVT_TO_BINANCE_INTERVAL: Record<string, string> = {
+      CI_1_M: '1m', CI_3_M: '3m', CI_5_M: '5m', CI_15_M: '15m', CI_30_M: '30m',
+      CI_1_H: '1h', CI_2_H: '2h', CI_4_H: '4h', CI_6_H: '6h', CI_8_H: '8h', CI_12_H: '12h',
+      CI_1_D: '1d', CI_3_D: '3d', CI_1_W: '1w',
+    };
+
     // Sub-hour intervals refresh more often, so cache them shorter.
     const ttl = interval.endsWith('_M') ? 5_000 : 30_000;
-    const cacheKey = `candles:${pair}:${interval}:${limit}`;
+    const cacheKey = exchange === 'binance'
+      ? `candles:binance:${pair}:${interval}:${limit}`
+      : `candles:${pair}:${interval}:${limit}`;
     const candles = await cache.getOrFetch(cacheKey, ttl, async () => {
+      if (exchange === 'binance') {
+        const binanceClient = getExchangeClient('binance');
+        const bnInterval = GRVT_TO_BINANCE_INTERVAL[interval] ?? '1h';
+        const rows = await binanceClient.getKlines(pair, bnInterval, limit);
+        // Binance returns ascending already — no reverse needed.
+        return rows;
+      }
       const rows = await grvtClient.getKlines(pair, interval, limit);
       // Reverse to ascending order for the chart (GRVT returns newest first).
       return rows.slice().reverse();
