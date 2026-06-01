@@ -1794,7 +1794,7 @@ export class GridEngine extends EventEmitter {
 
     const client = await this.getClientForBot(bot);
     const ticker = await client.getTicker(bot.pair);
-    const currentPrice = parseFloat(ticker.last_price);
+    const currentPrice = parseFloat((ticker as any).last_price ?? (ticker as any).lastPrice ?? '0');
     if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
       throw new Error(`Bot ${botId}: invalid ticker price`);
     }
