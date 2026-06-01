@@ -3095,7 +3095,9 @@ export class GridBotInstance {
       // Check BOTH fill sources ONCE (REST + WS-backed archive).
       // REST is slower but covers longer history; archive is fresher and
       // can catch fills inside the 10s placement window where REST lags.
-      const recentFills = await this.grvt.getFillHistory(50, this.bot.pair!);
+      const recentFills = (this.bot as any).exchange === 'binance'
+        ? await (this.grvt as any).getFillHistory(this.bot.pair!, 50)
+        : await this.grvt.getFillHistory(50, this.bot.pair!);
       const archivedFills = await db.findRecentFillsForBot(this.bot.id, 90_000);
       const now = Date.now();
 
