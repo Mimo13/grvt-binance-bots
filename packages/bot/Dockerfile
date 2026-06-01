@@ -27,12 +27,12 @@ COPY package.json package-lock.json ./
 COPY packages/bot/package.json packages/bot/
 COPY packages/bot/tsconfig.json packages/bot/
 
-RUN npm ci --workspace=@grvt-grid/bot --include-workspace-root
+RUN npm ci --workspace=@grvt-binance/bot --include-workspace-root
 
 # Now copy the source and build
 COPY packages/bot/src packages/bot/src
 COPY packages/bot/tests packages/bot/tests
-RUN npm run build --workspace=@grvt-grid/bot
+RUN npm run build --workspace=@grvt-binance/bot
 
 # ── Stage 2: dashboard builder ────────────────────────────────────────────
 # Builds the SPA into /build/packages/dashboard/dist. The dashboard uses
@@ -53,10 +53,10 @@ ENV VITE_BASE_PATH=${VITE_BASE_PATH} \
 COPY package.json package-lock.json ./
 COPY packages/dashboard/package.json packages/dashboard/
 
-RUN npm ci --workspace=@grvt-grid/dashboard --include-workspace-root
+RUN npm ci --workspace=@grvt-binance/dashboard --include-workspace-root
 
 COPY packages/dashboard packages/dashboard
-RUN npm run build --workspace=@grvt-grid/dashboard
+RUN npm run build --workspace=@grvt-binance/dashboard
 
 # ── Stage 3: runtime ──────────────────────────────────────────────────────
 FROM node:22-bookworm-slim AS runtime

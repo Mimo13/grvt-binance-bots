@@ -15,10 +15,10 @@ COPY package.json package-lock.json ./
 COPY packages/notifier/package.json packages/notifier/
 COPY packages/notifier/tsconfig.json packages/notifier/
 
-RUN npm ci --workspace=@grvt-grid/notifier --include-workspace-root
+RUN npm ci --workspace=@grvt-binance/notifier --include-workspace-root
 
 COPY packages/notifier/src packages/notifier/src
-RUN npm run build --workspace=@grvt-grid/notifier
+RUN npm run build --workspace=@grvt-binance/notifier
 
 # ── Runtime ─────────────────────────────────────────────────────────────
 FROM node:22-bookworm-slim AS runtime
