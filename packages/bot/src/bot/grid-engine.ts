@@ -915,8 +915,12 @@ export class GridEngine extends EventEmitter {
         log.info(`🆕 Bot ${botId} FRESH START — no matching GRVT state, bootstrapping.`);
         // Verificar balance antes de iniciar
         await this.validateSufficientBalance(bot);
-        // Establecer leverage
-        await client.setLeverage(bot.pair, bot.leverage);
+        // Establecer leverage solo para exchanges que lo soportan (GRVT/perps).
+        // Binance Spot/Testnet has no leverage endpoint; calling a Futures/GRVT
+        // leverage method here breaks the Spot start path.
+        if ((bot as any).exchange !== 'binance' && typeof (client as any).setLeverage === 'function') {
+          await (client as any).setLeverage(bot.pair, bot.leverage);
+        }
         // Colocar órdenes iniciales
         await instance.placeInitialOrders();
       }
@@ -1371,7 +1375,7 @@ export class GridEngine extends EventEmitter {
   private async validateSufficientBalance(bot: GridBot): Promise<void> {
     const client = await this.getClientForBot(bot);
     const balance = await client.getBalance();
-    const availableBalance = parseFloat(balance.available_balance);
+    const availableBalance = parseFloat((balance as any).available_balance ?? (balance as any).availableBalance ?? '0');
     
     const requiredMargin = bot.investment_usdt / bot.leverage;
     
@@ -1382,7 +1386,7 @@ export class GridEngine extends EventEmitter {
     }
     
     // Validar que no exceda el 95% del balance total (safeguard)
-    const totalBalance = parseFloat(balance.total_equity || balance.available_balance || '0');
+    const totalBalance = parseFloat((balance as any).total_equity ?? (balance as any).totalEquity ?? (balance as any).available_balance ?? (balance as any).availableBalance ?? '0');
     const maxInvestment = totalBalance * 0.95;
     if (bot.investment_usdt > maxInvestment) {
       throw new Error(`Inversión muy alta: máximo recomendado $${maxInvestment.toFixed(2)} (95% del balance total)`);
@@ -2219,7 +2223,7 @@ export class GridBotInstance {
     
     // Obtener precio actual
     const ticker = await this.grvt.getTicker(this.bot.pair);
-    const currentPrice = parseFloat(ticker.last_price);
+    const currentPrice = parseFloat((ticker as any).last_price ?? (ticker as any).lastPrice ?? '0');
 
     log.info(`📊 Bot ${this.bot.id}: Precio actual ${this.bot.pair}: $${currentPrice}`);
     log.info(`📊 Bot ${this.bot.id}: Estrategia ${this.bot.direction.toUpperCase()} con ${this.gridLevels.length} niveles`);
@@ -2351,6 +2355,28 @@ export class GridBotInstance {
         });
         
         log.info(`✅ [DRY RUN] Bot ${this.bot.id}: Compra inicial simulada exitosamente`);
+        return;
+      }
+
+      if ((this.bot as any).exchange === 'binance') {
+        const clientOrderId = `initial_purchase_${this.bot.id}`;
+        const order = await (this.grvt as any).createOrder({
+          symbol: this.bot.pair,
+          side: 'buy',
+          type: 'market',
+          quantity: totalQuantityNeeded.toString(),
+          clientOrderId,
+        });
+
+        const filledQty = parseFloat(String(order.filledQuantity ?? order.quantity ?? totalQuantityNeeded));
+        const avgPrice = parseFloat(String(order.price ?? currentPrice)) || currentPrice;
+        if (filledQty > 0) {
+          await db.updateBot(this.bot.id, {
+            position_size: filledQty,
+            avg_entry_price: avgPrice,
+          });
+        }
+        log.info(`✅ [REAL] Bot ${this.bot.id}: Binance Spot compra inicial ejecutada: ${filledQty} @ $${avgPrice}`);
         return;
       }
 
@@ -2609,6 +2635,57 @@ export class GridBotInstance {
         return;
       }
 
+      if ((this.bot as any).exchange === 'binance') {
+        const clientOrderId = `grid_${this.bot.id}_${level.level_index}`;
+        log.info(`💰 [DEBUG] REAL MODE - Enviando orden a Binance Spot: ${clientOrderId}`);
+
+        const order = await (this.grvt as any).createOrder({
+          symbol: this.bot.pair,
+          side: level.side,
+          type: 'limit',
+          quantity: level.quantity.toString(),
+          price: level.price.toString(),
+          timeInForce: 'gtc',
+          clientOrderId,
+        });
+
+        const realOrderId = String(order.orderId);
+        if (!realOrderId || realOrderId === 'undefined') {
+          throw new Error(`Binance createOrder returned no valid orderId for ${clientOrderId}`);
+        }
+
+        await db.createOrder({
+          bot_id: this.bot.id,
+          order_id: realOrderId,
+          instrument: this.bot.pair,
+          side: level.side,
+          type: 'limit',
+          quantity: level.quantity,
+          price: level.price,
+          status: 'pending',
+          grid_level_id: level.id,
+          metadata: clientOrderId,
+        });
+
+        await db.updateGridLevel(level.id, {
+          order_id: realOrderId,
+          state: 'active',
+        });
+
+        this.activeOrders.set(realOrderId, {
+          order_id: realOrderId,
+          grid_level_id: level.id,
+          side: level.side,
+          quantity: level.quantity,
+          price: level.price,
+          status: 'pending',
+          metadata: clientOrderId,
+        } as any);
+
+        log.info(`📝 ✅ Binance orden creada: ${level.side} ${level.quantity} ${this.bot.pair} @ $${level.price} (ID: ${realOrderId}) [notional: $${notional.toFixed(2)}]`);
+        return;
+      }
+
       // 💰 MODO REAL: Colocar orden en GRVT usando nuevo formato
       log.info(`💰 [DEBUG] REAL MODE - Enviando orden a GRVT con nuevo createOrder...`);
       
@@ -2722,7 +2799,7 @@ export class GridBotInstance {
     
     // 2. Get current price from the last ticker
     const ticker = await this.grvt.getTicker(this.bot.pair);
-    const currentPrice = parseFloat(ticker.last_price);
+    const currentPrice = parseFloat((ticker as any).last_price ?? (ticker as any).lastPrice ?? '0');
 
     // 2.5. SAFEGUARD: liquidation proximity check (C.4). Opt-in per bot.
     // Throws a SAFEGUARD:<action>: error that monitorAllBots() parses to

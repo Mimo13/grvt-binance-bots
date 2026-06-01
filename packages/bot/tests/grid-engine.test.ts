@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Hoist mock objects so they're available inside vi.mock factories
-const { mockGrvtClient, mockDb } = vi.hoisted(() => ({
+const { mockGrvtClient, mockDb, mockGetInstrumentSpec, mockGetExchangeClient } = vi.hoisted(() => ({
   mockGrvtClient: {
     getOpenOrders: vi.fn(),
     getFillHistory: vi.fn(),
@@ -16,6 +16,8 @@ const { mockGrvtClient, mockDb } = vi.hoisted(() => ({
     getInstruments: vi.fn(),
     login: vi.fn(),
   },
+  mockGetInstrumentSpec: vi.fn(() => ({ min_size: 0.00001, min_notional: 5 })),
+  mockGetExchangeClient: vi.fn(),
   mockDb: {
     getBot: vi.fn(),
     createBot: vi.fn(),
@@ -42,14 +44,85 @@ const { mockGrvtClient, mockDb } = vi.hoisted(() => ({
 vi.mock('../src/api/client.js', () => ({
   grvtClient: mockGrvtClient,
   GRVTClient: vi.fn(),
+  getInstrumentSpec: mockGetInstrumentSpec,
 }));
 
 vi.mock('../src/database/db.js', () => ({
   db: mockDb,
 }));
 
-import { GridBotInstance } from '../src/bot/grid-engine.js';
+vi.mock('../src/api/exchange-client-factory.js', () => ({
+  getExchangeClient: mockGetExchangeClient,
+  invalidateExchangeClient: vi.fn(),
+}));
+
+import { GridBotInstance, GridEngine } from '../src/bot/grid-engine.js';
 import { createMockFill, createMockGridLevel } from './setup.js';
+
+describe('GridEngine.startBot Binance Spot path', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.DRY_RUN = 'true';
+  });
+
+  it('starts Binance Spot bots without calling Futures/GRVT leverage APIs', async () => {
+    const bot = {
+      id: 9,
+      user_id: 1,
+      exchange: 'binance',
+      pair: 'BTCUSDC',
+      direction: 'long',
+      lower_price: 90000,
+      upper_price: 110000,
+      num_grids: 2,
+      spacing: 10000,
+      leverage: 1,
+      investment_usdt: 10,
+      quantity_per_level: 0.001,
+      status: 'paused',
+    };
+    const levels = [
+      createMockGridLevel({ id: 1, level_index: 0, price: 90000, side: 'buy', quantity: 0.001 }),
+      createMockGridLevel({ id: 2, level_index: 1, price: 100000, side: 'buy', quantity: 0.001 }),
+      createMockGridLevel({ id: 3, level_index: 2, price: 110000, side: 'sell', quantity: 0.001 }),
+    ];
+    const binanceClient = {
+      exchange: 'binance',
+      network: 'testnet',
+      getOpenOrders: vi.fn().mockResolvedValue([]),
+      getPosition: vi.fn().mockResolvedValue(null),
+      getBalance: vi.fn().mockResolvedValue({ availableBalance: '25', totalEquity: '25' }),
+      getTicker: vi.fn().mockResolvedValue({ symbol: 'BTCUSDC', lastPrice: '100000' }),
+      createOrder: vi.fn().mockResolvedValue({
+        orderId: 'dry-unused',
+        symbol: 'BTCUSDC',
+        side: 'buy',
+        type: 'limit',
+        quantity: '0.001',
+        filledQuantity: '0',
+        price: '90000',
+        status: 'open',
+        timeInForce: 'gtc',
+        createdTime: 1710000000000,
+        updatedTime: 1710000000000,
+      }),
+    };
+
+    mockDb.getBot.mockResolvedValue(bot);
+    mockDb.getGridLevels.mockResolvedValue(levels);
+    mockDb.updateBot.mockResolvedValue(undefined);
+    mockDb.updateGridLevel.mockResolvedValue(undefined);
+    mockDb.createOrder.mockResolvedValue(undefined);
+    mockGetExchangeClient.mockReturnValue(binanceClient);
+
+    const engine = new GridEngine();
+    await expect(engine.startBot(9)).resolves.toBeUndefined();
+
+    expect(mockGetExchangeClient).toHaveBeenCalledWith('binance');
+    expect((binanceClient as any).setLeverage).toBeUndefined();
+    expect(mockDb.updateBot).toHaveBeenCalledWith(9, { status: 'running' });
+  });
+});
 
 describe('GridBotInstance', () => {
   let instance: InstanceType<typeof GridBotInstance>;
@@ -125,11 +198,141 @@ describe('GridBotInstance', () => {
   });
 
   describe('placeGridOrder', () => {
+    it('places a Binance Spot market buy for initial long inventory before grid limits', async () => {
+      process.env.DRY_RUN = 'false';
+      mockBot = {
+        ...mockBot,
+        exchange: 'binance',
+        pair: 'BTCUSDC',
+        quantity_per_level: 0.001,
+      };
+      const levels = [
+        createMockGridLevel({ id: 1, level_index: 0, side: 'buy', price: 90000, quantity: 0.001 }),
+        createMockGridLevel({ id: 2, level_index: 1, side: 'buy', price: 100000, quantity: 0.001 }),
+        createMockGridLevel({ id: 3, level_index: 2, side: 'sell', price: 110000, quantity: 0.001 }),
+      ];
+      const binanceClient = {
+        exchange: 'binance',
+        network: 'testnet',
+        getTicker: vi.fn().mockResolvedValue({ symbol: 'BTCUSDC', lastPrice: '100000' }),
+        createOrder: vi.fn()
+          .mockResolvedValueOnce({
+            orderId: 'market-1',
+            symbol: 'BTCUSDC',
+            side: 'buy',
+            type: 'market',
+            quantity: '0.001',
+            filledQuantity: '0.001',
+            price: '100000',
+            status: 'filled',
+            timeInForce: 'ioc',
+            createdTime: 1710000000000,
+            updatedTime: 1710000000000,
+            clientOrderId: 'initial_purchase_1',
+          })
+          .mockResolvedValue({
+            orderId: 'limit-1',
+            symbol: 'BTCUSDC',
+            side: 'buy',
+            type: 'limit',
+            quantity: '0.001',
+            filledQuantity: '0',
+            price: '90000',
+            status: 'open',
+            timeInForce: 'gtc',
+            createdTime: 1710000000000,
+            updatedTime: 1710000000000,
+          }),
+      };
+      mockDb.getGridLevels.mockResolvedValue(levels);
+      mockDb.updateGridLevel.mockResolvedValue(undefined);
+      mockDb.updateBot.mockResolvedValue(undefined);
+      mockDb.createOrder.mockResolvedValue(undefined);
+      instance = new GridBotInstance(mockBot, binanceClient as any);
+
+      await instance.placeInitialOrders();
+
+      expect(binanceClient.createOrder).toHaveBeenNthCalledWith(1, {
+        symbol: 'BTCUSDC',
+        side: 'buy',
+        type: 'market',
+        quantity: '0.001',
+        clientOrderId: 'initial_purchase_1',
+      });
+      expect(mockDb.updateBot).toHaveBeenCalledWith(1, {
+        position_size: 0.001,
+        avg_entry_price: 100000,
+      });
+    });
+
     it('should call grvt.createOrder with correct params', async () => {
       const mockSignedOrder = { subAccountID: '1', legs: [], signature: {} };
       // We need to mock signOrder — it's imported at module level
       // For now, just verify the method exists
       expect(typeof (instance as any).placeGridOrder).toBe('function');
+    });
+
+    it('routes Binance Spot grid orders through IExchangeClient createOrder params', async () => {
+      process.env.DRY_RUN = 'false';
+      mockBot = {
+        ...mockBot,
+        exchange: 'binance',
+        pair: 'BTCUSDC',
+        quantity_per_level: 0.001,
+      };
+      const binanceClient = {
+        exchange: 'binance',
+        network: 'testnet',
+        createOrder: vi.fn().mockResolvedValue({
+          orderId: '12345',
+          symbol: 'BTCUSDC',
+          side: 'buy',
+          type: 'limit',
+          quantity: '0.001',
+          filledQuantity: '0',
+          price: '90000',
+          status: 'open',
+          timeInForce: 'gtc',
+          createdTime: 1710000000000,
+          updatedTime: 1710000000000,
+          clientOrderId: 'grid_1_3',
+        }),
+      };
+      instance = new GridBotInstance(mockBot, binanceClient as any);
+
+      await instance.placeGridOrder(createMockGridLevel({
+        id: 3,
+        level_index: 3,
+        side: 'buy',
+        price: 90000,
+        quantity: 0.001,
+      }));
+
+      expect(binanceClient.createOrder).toHaveBeenCalledWith({
+        symbol: 'BTCUSDC',
+        side: 'buy',
+        type: 'limit',
+        quantity: '0.001',
+        price: '90000',
+        timeInForce: 'gtc',
+        clientOrderId: 'grid_1_3',
+      });
+      expect(mockDb.createOrder).toHaveBeenCalledWith(expect.objectContaining({
+        bot_id: 1,
+        order_id: '12345',
+        instrument: 'BTCUSDC',
+        side: 'buy',
+        type: 'limit',
+        quantity: 0.001,
+        price: 90000,
+        status: 'pending',
+        grid_level_id: 3,
+        metadata: 'grid_1_3',
+      }));
+      expect(mockDb.updateGridLevel).toHaveBeenCalledWith(3, {
+        order_id: '12345',
+        state: 'active',
+      });
     });
   });
 });
