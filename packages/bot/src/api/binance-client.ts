@@ -214,12 +214,26 @@ export class BinanceClient implements IExchangeClient {
   }
 
   async getTicker(symbol: string): Promise<Ticker> {
-    const data = await publicRequest<Ws24hrTicker>(
+    const data = await publicRequest<Record<string, unknown>>(
       this.network,
       '/api/v3/ticker/24hr',
       { symbol }
     );
-    return this._wsTickerToTicker(data);
+    // REST /api/v3/ticker/24hr uses long field names (symbol, lastPrice, bidPrice, ...)
+    // WS 24hrTicker uses short names (s, c, b, ...). Handle both.
+    const d = data as Record<string, unknown>;
+    return {
+      symbol: String(d.symbol ?? d.s ?? symbol),
+      lastPrice: String(d.lastPrice ?? d.c ?? '0'),
+      bidPrice: String(d.bidPrice ?? d.b ?? '0'),
+      askPrice: String(d.askPrice ?? d.a ?? '0'),
+      markPrice: String(d.openPrice ?? d.o ?? '0'),
+      indexPrice: '0',
+      openInterest: String(d.count ?? d.Q ?? '0'),
+      volume24h: String(d.volume ?? d.v ?? '0'),
+      high24h: String(d.highPrice ?? d.h ?? '0'),
+      low24h: String(d.lowPrice ?? d.l ?? '0'),
+    };
   }
 
   async getKlines(symbol: string, interval: string, limit = 100): Promise<Kline[]> {
@@ -294,6 +308,12 @@ export class BinanceClient implements IExchangeClient {
       symbol,
       orderId: parseInt(orderId, 10),
     });
+  }
+
+  async cancelAllOrders(symbol?: string): Promise<void> {
+    const params: Record<string, string | number> = {};
+    if (symbol) params.symbol = symbol;
+    await signedRequest(this.config, 'DELETE', '/api/v3/openOrders', params);
   }
 
   async getOpenOrders(symbol?: string): Promise<Order[]> {

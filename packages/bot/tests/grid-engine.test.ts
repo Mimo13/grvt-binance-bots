@@ -473,31 +473,20 @@ describe('GridBotInstance', () => {
       expect(binanceInstance.getBinanceBuyCap()).toBe(1000);
     });
 
-    it('getBinanceSellCap returns min(capital_token, wallet balance)', async () => {
+    it('getBinanceSellCap returns capital_token', async () => {
       binanceBot.capital_token = 0.005;
-      const mockClient = {
-        exchange: 'binance',
-        getBalance: vi.fn().mockResolvedValue({
-          balances: [{ asset: 'BTC', free: '0.003', locked: '0' }],
-        }),
-      };
-      binanceInstance = new GridBotInstance(binanceBot, mockClient as any);
-
-      const sellCap = await binanceInstance.getBinanceSellCap();
-      // min(0.005, 0.003) = 0.003
-      expect(sellCap).toBeCloseTo(0.003, 6);
-    });
-
-    it('getBinanceSellCap falls back to bot holdings when getBalance fails', async () => {
-      binanceBot.capital_token = 0.005;
-      const mockClient = {
-        exchange: 'binance',
-        getBalance: vi.fn().mockRejectedValue(new Error('network')),
-      };
-      binanceInstance = new GridBotInstance(binanceBot, mockClient as any);
+      binanceInstance = new GridBotInstance(binanceBot, {} as any);
 
       const sellCap = await binanceInstance.getBinanceSellCap();
       expect(sellCap).toBeCloseTo(0.005, 6);
+    });
+
+    it('getBinanceSellCap returns 0 when no tokens held', async () => {
+      binanceBot.capital_token = 0;
+      binanceInstance = new GridBotInstance(binanceBot, {} as any);
+
+      const sellCap = await binanceInstance.getBinanceSellCap();
+      expect(sellCap).toBe(0);
     });
 
     it('blocks sell order when capital_token = 0', async () => {

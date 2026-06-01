@@ -1225,10 +1225,10 @@ export class GridEngine extends EventEmitter {
   async calculateGridLevels(config: GridConfig): Promise<GridCalculation> {
     // Multi-tenant: route ticker + liq-price lookups through the
     // owner's GRVT client so grid previews don't leak between users.
-    const client = await this.getClientForBot({ user_id: config.userId });
+    const client = await this.getClientForBot({ user_id: config.userId, exchange: config.exchange });
     // Obtener precio actual
     const ticker = await client.getTicker(config.pair);
-    const currentPrice = parseFloat(ticker.last_price);
+    const currentPrice = parseFloat((ticker as any).last_price ?? (ticker as any).lastPrice ?? '0');
 
     // Validar que el precio actual esté dentro del rango
     if (currentPrice <= config.lowerPrice || currentPrice >= config.upperPrice) {
@@ -2182,17 +2182,11 @@ export class GridBotInstance {
    */
   async getBinanceSellCap(): Promise<number> {
     if ((this.bot as any).exchange !== 'binance') return Infinity;
-    const botHoldings = this._capitalToken;
-    try {
-      const balance = await (this.grvt as any).getBalance();
-      const baseAsset = this.bot.pair.replace(/USDC$|USDT$/i, '');
-      const assetBal = (balance as any).balances?.find((a: any) => a.asset === baseAsset);
-      const walletFree = assetBal ? parseFloat(assetBal.free || '0') : 0;
-      return Math.min(botHoldings, walletFree);
-    } catch {
-      log.warn(`⚠️ Bot ${this.bot.id}: getBalance failed for sell_cap, using bot holdings only`);
-      return botHoldings;
-    }
+    // Use tracked capital_token as primary source.
+    // BinanceClient.getBalance() only returns USDC, not base asset,
+    // so we can't do a reliable min(bot, wallet) cross-check yet.
+    // TODO: add getAccountBalances() to IExchangeClient for full asset list.
+    return this._capitalToken;
   }
 
   /**
