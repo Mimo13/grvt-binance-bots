@@ -25,7 +25,6 @@
     "express-rate-limit": "^8.5.1",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
-    "node-binance-api": "^0.13.3",
     "nodemailer": "^8.0.6",
     "pino": "^9.5.0",
     "pino-pretty": "^11.3.0",
