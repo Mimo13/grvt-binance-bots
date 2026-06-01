@@ -3,10 +3,20 @@
 // duplicate instrument guard (C.9), safeguard field validation (C.4),
 // pagination params (C.7), and credential format validation (C.2).
 
-import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { createV2Router, type V2RouterDeps } from '../src/server/v2-router.js';
+import { getExchangeClient } from '../src/api/exchange-client-factory.js';
+
+vi.mock('../src/api/exchange-client-factory.js', () => ({
+  getExchangeClient: vi.fn(),
+  invalidateExchangeClient: vi.fn(),
+  invalidateAllExchangeClients: vi.fn(),
+  getAvailableExchanges: vi.fn(() => ['grvt', 'binance']),
+}));
+
+const mockGetExchangeClient = vi.mocked(getExchangeClient);
 
 // ── Mock deps ────────────────────────────────────────────────────────
 // The router takes injected deps — we provide fakes that return
@@ -17,6 +27,10 @@ function makeMockDb() {
   const rows: Record<string, any[]> = {};
   return {
     all(sql: string, params: any[], cb: (err: Error | null, rows: any[]) => void) {
+      if (sql.includes('SELECT') && sql.includes('grid_levels')) {
+        cb(null, rows['levels'] ?? []);
+        return;
+      }
       // C.9: duplicate check
       if (sql.includes('COUNT(*)') && sql.includes('grid_bots') && sql.includes('status')) {
         const pair = params[1];
@@ -74,11 +88,19 @@ function makeMockGrvtClient() {
   return {
     getInstruments: vi.fn().mockResolvedValue([]),
     getBalance: vi.fn().mockResolvedValue({ total_equity: '10000', available_balance: '5000' }),
-    getTicker: vi.fn().mockResolvedValue({ last_price: '2100' }),
-    getPosition: vi.fn().mockResolvedValue(null),
-    getOpenOrders: vi.fn().mockResolvedValue([]),
+    getTicker: vi.fn().mockResolvedValue({ last_price: '2100', source: 'grvt' }),
+    getPosition: vi.fn().mockResolvedValue({ source: 'grvt-position' }),
+    getOpenOrders: vi.fn().mockResolvedValue([{ source: 'grvt-order' }]),
     getKlines: vi.fn().mockResolvedValue([]),
     getFillHistory: vi.fn().mockResolvedValue([]),
+  };
+}
+
+function makeMockBinanceClient() {
+  return {
+    getTicker: vi.fn().mockResolvedValue({ lastPrice: '100.5', source: 'binance' }),
+    getPosition: vi.fn().mockResolvedValue({ symbol: 'BTCUSDC', source: 'binance-position' }),
+    getOpenOrders: vi.fn().mockResolvedValue([{ orderId: 123, source: 'binance-order' }]),
   };
 }
 
@@ -109,9 +131,15 @@ function makeMockGridBotDb() {
 
 const API_KEY = 'test-api-key-32-chars-long-xxxx';
 
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
 function createTestApp() {
   const db = makeMockDb();
   const grvtClient = makeMockGrvtClient();
+  const binanceClient = makeMockBinanceClient();
+  mockGetExchangeClient.mockReturnValue(binanceClient as any);
   const engineOps = makeMockEngineOps();
   const gridBotDb = makeMockGridBotDb();
 
@@ -127,7 +155,7 @@ function createTestApp() {
   app.use(express.json());
   app.use('/api/v2', router);
 
-  return { app, db, grvtClient, engineOps, gridBotDb };
+  return { app, db, grvtClient, binanceClient, engineOps, gridBotDb };
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -160,6 +188,47 @@ describe('GET /api/v2/health (C.6)', () => {
     expect(res.body.checks.db.ok).toBe(true);
     expect(res.body.checks.grvt.ok).toBe(false);
     expect(res.body.checks.grvt.error).toContain('GRVT unreachable');
+  });
+});
+
+describe('GET /api/v2/bots/:id/grid-state — exchange routing', () => {
+  it('routes GRVT bots through the injected GRVT client', async () => {
+    const { app, db, grvtClient } = createTestApp();
+    db._addBot({ id: 7, user_id: 1, pair: 'ETH_USDT_Perp', status: 'running', exchange: 'grvt' });
+
+    const res = await request(app)
+      .get('/api/v2/bots/7/grid-state')
+      .set('X-Api-Key', API_KEY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.exchange).toBe('grvt');
+    expect(res.body.ticker).toMatchObject({ source: 'grvt' });
+    expect(res.body.position).toMatchObject({ source: 'grvt-position' });
+    expect(res.body.openOrders).toEqual([{ source: 'grvt-order' }]);
+    expect(grvtClient.getTicker).toHaveBeenCalledWith('ETH_USDT_Perp');
+    expect(mockGetExchangeClient).not.toHaveBeenCalled();
+  });
+
+  it('routes Binance bots through the Binance exchange client, not GRVT', async () => {
+    const { app, db, grvtClient, binanceClient } = createTestApp();
+    db._addBot({ id: 8, user_id: 1, pair: 'BTCUSDC', status: 'running', exchange: 'binance' });
+
+    const res = await request(app)
+      .get('/api/v2/bots/8/grid-state')
+      .set('X-Api-Key', API_KEY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.exchange).toBe('binance');
+    expect(res.body.ticker).toMatchObject({ source: 'binance' });
+    expect(res.body.position).toMatchObject({ source: 'binance-position' });
+    expect(res.body.openOrders).toEqual([{ orderId: 123, source: 'binance-order' }]);
+    expect(mockGetExchangeClient).toHaveBeenCalledWith('binance');
+    expect(binanceClient.getTicker).toHaveBeenCalledWith('BTCUSDC');
+    expect(binanceClient.getPosition).toHaveBeenCalledWith('BTCUSDC');
+    expect(binanceClient.getOpenOrders).toHaveBeenCalledWith('BTCUSDC');
+    expect(grvtClient.getTicker).not.toHaveBeenCalled();
+    expect(grvtClient.getPosition).not.toHaveBeenCalled();
+    expect(grvtClient.getOpenOrders).not.toHaveBeenCalled();
   });
 });
 
@@ -204,6 +273,32 @@ describe('POST /api/v2/bots — C.9 duplicate instrument guard', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.id).toBe(42);
+  });
+
+  it('forwards exchange=binance into engineOps.createBot so DB persistence keeps routing', async () => {
+    const { app, engineOps } = createTestApp();
+
+    const res = await request(app)
+      .post('/api/v2/bots')
+      .set('X-Api-Key', API_KEY)
+      .send({
+        exchange: 'binance',
+        pair: 'BTCUSDC',
+        direction: 'long',
+        lower_price: 90000,
+        upper_price: 110000,
+        num_grids: 10,
+        investment_usdt: 10,
+        leverage: 1,
+      });
+
+    expect(res.status).toBe(201);
+    expect(engineOps.createBot).toHaveBeenCalledWith(expect.objectContaining({
+      exchange: 'binance',
+      pair: 'BTCUSDC',
+      leverage: 1,
+      investmentUSDT: 10,
+    }));
   });
 
   it('allows creation when existing bot is stopped', async () => {

@@ -24,6 +24,7 @@ import { encryptCredentialFields } from '../auth/crypto.js';
 import { sendPasswordResetEmail, isMailerConfigured } from '../mail/mailer.js';
 import { GRVTClient, type GrvtClientCreds, type GrvtNetwork } from '../api/client.js';
 import { invalidateGrvtClient } from '../api/grvt-client-factory.js';
+import { getExchangeClient } from '../api/exchange-client-factory.js';
 
 
 // Augment Express Request to carry the authenticated user id set
@@ -1109,9 +1110,9 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid bot id' });
     await requireBotOwnership(db, id, req.userId!);
 
-    const bot = await dbGet<{ pair: string; status: string }>(
+    const bot = await dbGet<{ pair: string; status: string; exchange?: 'grvt' | 'binance' | null }>(
       db,
-      `SELECT pair, status FROM grid_bots WHERE id = ?`,
+      `SELECT pair, status, COALESCE(exchange, 'grvt') AS exchange FROM grid_bots WHERE id = ?`,
       [id]
     );
     if (!bot) return res.status(404).json({ error: 'bot not found' });
@@ -1126,16 +1127,21 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       ORDER BY level_index
     `, [id]);
 
-    // Live data from GRVT (cached 2s).
+    // Live data from the bot's configured exchange (cached 2s).
+    // Do not always call GRVT here: Binance bots must route through the
+    // exchange abstraction or the dashboard shows GRVT state for a Binance bot.
+    const exchange = bot.exchange ?? 'grvt';
+    const exchangeClient = exchange === 'binance' ? getExchangeClient('binance') : grvtClient;
     const [ticker, position, openOrders] = await Promise.all([
-      cache.getOrFetch(`ticker:${bot.pair}`, 2_000, () => grvtClient.getTicker(bot.pair)),
-      cache.getOrFetch(`position:${bot.pair}`, 2_000, () => grvtClient.getPosition(bot.pair)),
-      cache.getOrFetch(`openOrders:${bot.pair}`, 2_000, () => grvtClient.getOpenOrders(bot.pair))
+      cache.getOrFetch(`${exchange}:ticker:${bot.pair}`, 2_000, () => exchangeClient.getTicker(bot.pair)),
+      cache.getOrFetch(`${exchange}:position:${bot.pair}`, 2_000, () => exchangeClient.getPosition(bot.pair)),
+      cache.getOrFetch(`${exchange}:openOrders:${bot.pair}`, 2_000, () => exchangeClient.getOpenOrders(bot.pair))
     ]);
 
     res.json({
       botId: id,
       pair: bot.pair,
+      exchange,
       status: bot.status,
       levels,
       ticker,
