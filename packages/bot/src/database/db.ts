@@ -83,6 +83,14 @@ export interface GridBot {
   // Existing/legacy rows default to 'grvt'. This field determines which
   // exchange client the grid engine uses for this bot.
   exchange?: 'grvt' | 'binance';
+  // Binance Spot capital isolation (6.3). Tracks per-bot USDC/token
+  // balances independently from the wallet-wide balance. Prevents
+  // overspend when multiple bots share the same Binance account.
+  capital_usdc?: number;       // USDC allocated to this bot
+  capital_token?: number;      // base token held by this bot
+  total_base_bought?: number;  // cumulative base bought
+  total_base_sold?: number;    // cumulative base sold
+  realized_pnl?: number;       // realized PnUSDC from completed round-trips
 }
 
 export interface GridLevel {
@@ -392,6 +400,12 @@ export class GridBotDB {
       // Exchange: 'grvt' (USDT pairs) or 'binance' (USDC pairs).
       // All existing bots default to 'grvt' (GRVT was the only exchange).
       "exchange TEXT DEFAULT 'grvt'",
+      // 6.3: Binance Spot capital isolation columns
+      'capital_usdc REAL',
+      'capital_token REAL DEFAULT 0',
+      'total_base_bought REAL DEFAULT 0',
+      'total_base_sold REAL DEFAULT 0',
+      'realized_pnl REAL DEFAULT 0',
     ]) {
       try { await this.dbRun(`ALTER TABLE grid_bots ADD COLUMN ${col}`); } catch (e) { /* exists */ }
     }

@@ -737,6 +737,13 @@ export class GridEngine extends EventEmitter {
         grvt_sub_account_id: config.grvtSubAccountId ?? null,
         grvt_network: config.grvtNetwork ?? 'testnet',
         exchange: config.exchange ?? 'grvt',
+        // 6.3: Binance Spot capital isolation — initialize capital_usdc
+        // from investment. capital_token starts at 0 (no position yet).
+        capital_usdc: (config.exchange ?? 'grvt') === 'binance' ? config.investmentUSDT : undefined,
+        capital_token: 0,
+        total_base_bought: 0,
+        total_base_sold: 0,
+        realized_pnl: 0,
         params_json: JSON.stringify({
           spacing: calculation.spacing,
           quantityPerGrid: calculation.quantityPerGrid,
@@ -2120,10 +2127,27 @@ export class GridBotInstance {
   // singleton only for legacy bots with no user_id (the factory
   // couldn't resolve a per-user client).
   private injectedClient: GRVTClient | null = null;
+  // 6.3: Binance Spot capital isolation — in-memory state synced from DB.
+  // These track the bot's own USDC/token balances independently from
+  // the wallet-wide balance on Binance. Prevents overspend when
+  // multiple bots share the same Binance account.
+  private _capitalUsdc = 0;
+  private _capitalToken = 0;
+  private _totalBaseBought = 0;
+  private _totalBaseSold = 0;
+  private _realizedPnl = 0;
 
   constructor(bot: GridBot, client?: GRVTClient) {
     this.bot = bot;
     this.injectedClient = client ?? null;
+    // Initialize Binance Spot capital tracking from DB values
+    if ((bot as any).exchange === 'binance') {
+      this._capitalUsdc = (bot as any).capital_usdc ?? bot.investment_usdt ?? 0;
+      this._capitalToken = (bot as any).capital_token ?? 0;
+      this._totalBaseBought = (bot as any).total_base_bought ?? 0;
+      this._totalBaseSold = (bot as any).total_base_sold ?? 0;
+      this._realizedPnl = (bot as any).realized_pnl ?? 0;
+    }
   }
 
   /** Accessor for the GRVT client this bot should use. Falls back
@@ -2135,6 +2159,92 @@ export class GridBotInstance {
   /** Replace the injected client (e.g. when user updates creds). */
   rebindClient(client: GRVTClient): void {
     this.injectedClient = client;
+  }
+
+  // ── 6.3: Binance Spot capital isolation ──────────────────────────────
+
+  /** Snapshot of per-bot capital for dashboard/status. */
+  getCapitalSnapshot(): { usdc: number; token: number; bought: number; sold: number; realizedPnl: number } {
+    return {
+      usdc: this._capitalUsdc,
+      token: this._capitalToken,
+      bought: this._totalBaseBought,
+      sold: this._totalBaseSold,
+      realizedPnl: this._realizedPnl,
+    };
+  }
+
+  /**
+   * Sell cap: the MAXIMUM quantity this bot is allowed to sell.
+   * = min(bot's own token holdings, wallet-side available balance).
+   * Prevents overselling when multiple bots share one Binance account.
+   * Falls back to bot holdings when wallet query fails (fail-safe).
+   */
+  async getBinanceSellCap(): Promise<number> {
+    if ((this.bot as any).exchange !== 'binance') return Infinity;
+    const botHoldings = this._capitalToken;
+    try {
+      const balance = await (this.grvt as any).getBalance();
+      const baseAsset = this.bot.pair.replace(/USDC$|USDT$/i, '');
+      const assetBal = (balance as any).balances?.find((a: any) => a.asset === baseAsset);
+      const walletFree = assetBal ? parseFloat(assetBal.free || '0') : 0;
+      return Math.min(botHoldings, walletFree);
+    } catch {
+      log.warn(`⚠️ Bot ${this.bot.id}: getBalance failed for sell_cap, using bot holdings only`);
+      return botHoldings;
+    }
+  }
+
+  /**
+   * Buy cap: the MAXIMUM notional (USDC) this bot is allowed to spend.
+   * = capital_usdc (allocated at creation, decremented on each buy).
+   */
+  getBinanceBuyCap(): number {
+    return this._capitalUsdc;
+  }
+
+  /**
+   * Record a BUY fill: deduct USDC, add token, update avg price.
+   */
+  recordBuyFill(qty: number, price: number, fee: number): void {
+    const cost = qty * price + fee;
+    this._capitalUsdc = Math.max(0, this._capitalUsdc - cost);
+    this._capitalToken += qty;
+    this._totalBaseBought += qty;
+    log.info(`📊 [CAPITAL] Bot ${this.bot.id} BUY ${qty} @ $${price} — capital_usdc=$${this._capitalUsdc.toFixed(2)}, capital_token=${this._capitalToken.toFixed(6)}`);
+  }
+
+  /**
+   * Record a SELL fill: add USDC proceeds, deduct token, track realized PnL.
+   */
+  recordSellFill(qty: number, price: number, fee: number): void {
+    const proceeds = qty * price - fee;
+    this._capitalUsdc += proceeds;
+    this._capitalToken = Math.max(0, this._capitalToken - qty);
+    this._totalBaseSold += qty;
+    // Realized PnL: proceeds minus cost basis for this qty
+    const avgBuy = this._totalBaseBought > 0
+      ? (this.bot.investment_usdt - this._capitalUsdc + proceeds) / (this._totalBaseBought || 1)
+      : 0;
+    const pnl = (price - avgBuy) * qty - fee;
+    this._realizedPnl += pnl;
+    log.info(`📊 [CAPITAL] Bot ${this.bot.id} SELL ${qty} @ $${price} — capital_usdc=$${this._capitalUsdc.toFixed(2)}, capital_token=${this._capitalToken.toFixed(6)}, realized_pnl=$${this._realizedPnl.toFixed(2)}`);
+  }
+
+  /** Persist capital state to DB (called after fills). */
+  async persistCapital(): Promise<void> {
+    if ((this.bot as any).exchange !== 'binance') return;
+    try {
+      await db.updateBot(this.bot.id, {
+        capital_usdc: this._capitalUsdc,
+        capital_token: this._capitalToken,
+        total_base_bought: this._totalBaseBought,
+        total_base_sold: this._totalBaseSold,
+        realized_pnl: this._realizedPnl,
+      } as any);
+    } catch (e) {
+      log.warn({ err: (e as Error).message }, `⚠️ Failed to persist capital for bot ${this.bot.id}`);
+    }
   }
 
   /** Read-only accessor used by the engine's fill poller to attribute
@@ -2369,6 +2479,13 @@ export class GridBotInstance {
       }
 
       if ((this.bot as any).exchange === 'binance') {
+        // 6.3: Validate capital before initial purchase
+        const initialCost = totalQuantityNeeded * currentPrice;
+        if (initialCost > this._capitalUsdc) {
+          log.info(`⚠️ [CAPITAL] Bot ${this.bot.id}: initial purchase blocked — cost $${initialCost.toFixed(2)} > capital_usdc $${this._capitalUsdc.toFixed(2)}`);
+          return;
+        }
+
         const clientOrderId = `initial_purchase_${this.bot.id}`;
         const order = await (this.grvt as any).createOrder({
           symbol: this.bot.pair,
@@ -2380,13 +2497,18 @@ export class GridBotInstance {
 
         const filledQty = parseFloat(String(order.filledQuantity ?? order.quantity ?? totalQuantityNeeded));
         const avgPrice = parseFloat(String(order.price ?? currentPrice)) || currentPrice;
+        const fee = parseFloat(String(order.fee ?? '0'));
         if (filledQty > 0) {
+          // 6.3: Track capital on initial purchase
+          this.recordBuyFill(filledQty, avgPrice, fee);
+          await this.persistCapital();
+
           await db.updateBot(this.bot.id, {
             position_size: filledQty,
             avg_entry_price: avgPrice,
           });
         }
-        log.info(`✅ [REAL] Bot ${this.bot.id}: Binance Spot compra inicial ejecutada: ${filledQty} @ $${avgPrice}`);
+        log.info(`✅ [REAL] Bot ${this.bot.id}: Binance Spot compra inicial ejecutada: ${filledQty} @ $${avgPrice} [capital_usdc=$${this._capitalUsdc.toFixed(2)}, capital_token=${this._capitalToken.toFixed(6)}]`);
         return;
       }
 
@@ -2649,9 +2771,48 @@ export class GridBotInstance {
         const clientOrderId = `grid_${this.bot.id}_${level.level_index}`;
         log.info(`💰 [DEBUG] REAL MODE - Enviando orden a Binance Spot: ${clientOrderId}`);
 
+        // 6.3: Capital validation — prevent overspend/oversell
+        if (level.side === 'sell') {
+          const sellCap = await this.getBinanceSellCap();
+          const effectiveQty = Math.min(level.quantity, sellCap);
+          if (effectiveQty <= 0) {
+            log.info(`⚠️ [CAPITAL] Bot ${this.bot.id}: sell blocked — no capital_token (holdings=${this._capitalToken}, sell_cap=${sellCap})`);
+            return;
+          }
+          if (effectiveQty < level.quantity) {
+            log.info(`⚠️ [CAPITAL] Bot ${this.bot.id}: sell qty reduced ${level.quantity} → ${effectiveQty} (sell_cap=${sellCap})`);
+          }
+          const order = await (this.grvt as any).createOrder({
+            symbol: this.bot.pair,
+            side: 'sell',
+            type: 'limit',
+            quantity: effectiveQty.toString(),
+            price: level.price.toString(),
+            timeInForce: 'gtc',
+            clientOrderId,
+          });
+          const realOrderId = String(order.orderId);
+          if (!realOrderId || realOrderId === 'undefined') {
+            throw new Error(`Binance createOrder returned no valid orderId for ${clientOrderId}`);
+          }
+          await db.createOrder({ bot_id: this.bot.id, order_id: realOrderId, instrument: this.bot.pair, side: 'sell', type: 'limit', quantity: effectiveQty, price: level.price, status: 'pending', grid_level_id: level.id, metadata: clientOrderId });
+          await db.updateGridLevel(level.id, { order_id: realOrderId, state: 'active' });
+          this.activeOrders.set(realOrderId, { order_id: realOrderId, grid_level_id: level.id, side: 'sell', quantity: effectiveQty, price: level.price, status: 'pending', metadata: clientOrderId } as any);
+          log.info(`📝 ✅ Binance sell orden creada: ${effectiveQty} ${this.bot.pair} @ $${level.price} (ID: ${realOrderId}) [sell_cap=${sellCap}]`);
+          return;
+        }
+
+        // Buy side: validate against capital_usdc
+        const buyCost = level.quantity * level.price;
+        const buyCap = this.getBinanceBuyCap();
+        if (buyCost > buyCap) {
+          log.info(`⚠️ [CAPITAL] Bot ${this.bot.id}: buy blocked — cost $${buyCost.toFixed(2)} > capital_usdc $${buyCap.toFixed(2)}`);
+          return;
+        }
+
         const order = await (this.grvt as any).createOrder({
           symbol: this.bot.pair,
-          side: level.side,
+          side: 'buy',
           type: 'limit',
           quantity: level.quantity.toString(),
           price: level.price.toString(),
@@ -2668,7 +2829,7 @@ export class GridBotInstance {
           bot_id: this.bot.id,
           order_id: realOrderId,
           instrument: this.bot.pair,
-          side: level.side,
+          side: 'buy',
           type: 'limit',
           quantity: level.quantity,
           price: level.price,
@@ -2685,14 +2846,14 @@ export class GridBotInstance {
         this.activeOrders.set(realOrderId, {
           order_id: realOrderId,
           grid_level_id: level.id,
-          side: level.side,
+          side: 'buy',
           quantity: level.quantity,
           price: level.price,
           status: 'pending',
           metadata: clientOrderId,
         } as any);
 
-        log.info(`📝 ✅ Binance orden creada: ${level.side} ${level.quantity} ${this.bot.pair} @ $${level.price} (ID: ${realOrderId}) [notional: $${notional.toFixed(2)}]`);
+        log.info(`📝 ✅ Binance buy orden creada: ${level.quantity} ${this.bot.pair} @ $${level.price} (ID: ${realOrderId}) [notional: $${notional.toFixed(2)}, capital_usdc: $${this._capitalUsdc.toFixed(2)}]`);
         return;
       }
 
@@ -3171,25 +3332,31 @@ export class GridBotInstance {
     this.activeOrders.delete(orderId);
     
     try {
-      // ⚠️ FIX: Obtener fills reales de GRVT para extraer fees
+      // ⚠️ FIX: Obtener fills reales para extraer fees
       let realFills: any[] = [];
       let totalFees = 0;
       try {
-        const fillHistory = await this.grvt.getFillHistory(50, this.bot.pair);
+        // 6.3: Use correct call signature per exchange
+        const isBinance = (this.bot as any).exchange === 'binance';
+        const fillHistory = isBinance
+          ? await (this.grvt as any).getFillHistory(this.bot.pair, 50)
+          : await this.grvt.getFillHistory(50, this.bot.pair);
         // Buscar fills que corresponden a esta orden (por client_order_id o timestamp cercano)
         const orderTrackingId = order.metadata || orderId;
-        realFills = fillHistory.filter(fill => {
-          return fill.client_order_id === orderTrackingId || 
-                 fill.order_id === order.order_id ||
-                 (Math.abs(new Date((fill as any).timestamp || fill.created_time * 1000).getTime() - Date.now()) < 60000 && 
+        realFills = fillHistory.filter((fill: any) => {
+          const fillOrderId = String(fill.order_id ?? fill.orderId ?? '');
+          const fillClientId = String(fill.client_order_id ?? fill.clientOrderId ?? '');
+          return fillClientId === orderTrackingId ||
+                 fillOrderId === String(order.order_id) ||
+                 (Math.abs(new Date((fill as any).timestamp || (fill.created_time ?? fill.createdTime ?? 0) * 1000).getTime() - Date.now()) < 60000 &&
                   Math.abs(parseFloat(fill.price) - (order.price || 0)) < 0.5);
         });
-        
-        totalFees = realFills.reduce((sum, fill) => sum + parseFloat(fill.fee), 0);
+
+        totalFees = realFills.reduce((sum: number, fill: any) => sum + parseFloat(fill.fee ?? '0'), 0);
         log.info(`💰 [DEBUG] Fills encontrados para orden ${orderId}: ${realFills.length}, fees total: ${totalFees}`);
-        
+
       } catch (fillErr) {
-        log.info(`⚠️ Error obteniendo fills de GRVT: ${fillErr}, usando fee=0`);
+        log.info(`⚠️ Error obteniendo fills: ${fillErr}, usando fee=0`);
       }
 
       // Marcar grid level como completado
@@ -3201,6 +3368,22 @@ export class GridBotInstance {
       try { await db.updateOrderStatus(orderId, 'filled'); } catch(e) { /* ignore if not found */ }
 
       log.info(`✅ Orden filled: ${order.side} ${order.quantity} @ $${order.price} (fee: ${totalFees})`);
+
+      // 6.3: Update capital tracking for Binance Spot
+      if ((this.bot as any).exchange === 'binance') {
+        const fillQty = realFills.length > 0
+          ? realFills.reduce((sum: number, f: any) => sum + parseFloat(f.size ?? f.quantity ?? '0'), 0)
+          : order.quantity;
+        const fillPrice = realFills.length > 0
+          ? realFills.reduce((sum: number, f: any) => sum + parseFloat(f.price) * parseFloat(f.size ?? f.quantity ?? '0'), 0) / (fillQty || 1)
+          : order.price;
+        if (order.side === 'buy') {
+          this.recordBuyFill(fillQty, fillPrice, totalFees);
+        } else {
+          this.recordSellFill(fillQty, fillPrice, totalFees);
+        }
+        await this.persistCapital();
+      }
 
       // Registrar trades REALES con fees
       if (realFills.length > 0) {

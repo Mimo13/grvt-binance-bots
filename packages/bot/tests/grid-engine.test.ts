@@ -77,7 +77,8 @@ describe('GridEngine.startBot Binance Spot path', () => {
       num_grids: 2,
       spacing: 10000,
       leverage: 1,
-      investment_usdt: 10,
+      investment_usdt: 1000,
+      capital_usdc: 1000,
       quantity_per_level: 0.001,
       status: 'paused',
     };
@@ -91,7 +92,7 @@ describe('GridEngine.startBot Binance Spot path', () => {
       network: 'testnet',
       getOpenOrders: vi.fn().mockResolvedValue([]),
       getPosition: vi.fn().mockResolvedValue(null),
-      getBalance: vi.fn().mockResolvedValue({ availableBalance: '25', totalEquity: '25' }),
+      getBalance: vi.fn().mockResolvedValue({ availableBalance: '2000', totalEquity: '2000' }),
       getTicker: vi.fn().mockResolvedValue({ symbol: 'BTCUSDC', lastPrice: '100000' }),
       createOrder: vi.fn().mockResolvedValue({
         orderId: 'dry-unused',
@@ -261,6 +262,8 @@ describe('GridBotInstance', () => {
         exchange: 'binance',
         pair: 'BTCUSDC',
         quantity_per_level: 0.001,
+        investment_usdt: 1000,
+        capital_usdc: 1000,
       };
       const levels = [
         createMockGridLevel({ id: 1, level_index: 0, side: 'buy', price: 90000, quantity: 0.001 }),
@@ -335,6 +338,8 @@ describe('GridBotInstance', () => {
         exchange: 'binance',
         pair: 'BTCUSDC',
         quantity_per_level: 0.001,
+        investment_usdt: 1000,
+        capital_usdc: 1000,
       };
       const binanceClient = {
         exchange: 'binance',
@@ -389,6 +394,141 @@ describe('GridBotInstance', () => {
         order_id: '12345',
         state: 'active',
       });
+    });
+  });
+
+  // ── 6.3: Binance Spot capital manager tests ────────────────────────
+  describe('Binance Spot capital manager', () => {
+    let binanceBot: any;
+    let binanceInstance: InstanceType<typeof GridBotInstance>;
+
+    beforeEach(() => {
+      binanceBot = {
+        id: 42,
+        user_id: 1,
+        pair: 'BTCUSDC',
+        direction: 'long',
+        leverage: 1,
+        lower_price: 90000,
+        upper_price: 110000,
+        num_grids: 10,
+        investment_usdt: 1000,
+        capital_usdc: 1000,
+        capital_token: 0,
+        total_base_bought: 0,
+        total_base_sold: 0,
+        realized_pnl: 0,
+        quantity_per_level: 0.001,
+        exchange: 'binance',
+        status: 'running',
+      };
+    });
+
+    it('initializes capital from DB values on construction', () => {
+      binanceBot.capital_usdc = 500;
+      binanceBot.capital_token = 0.005;
+      binanceBot.total_base_bought = 0.01;
+      binanceBot.total_base_sold = 0.005;
+      binanceBot.realized_pnl = 2.5;
+
+      binanceInstance = new GridBotInstance(binanceBot, {} as any);
+      const snap = binanceInstance.getCapitalSnapshot();
+
+      expect(snap.usdc).toBe(500);
+      expect(snap.token).toBe(0.005);
+      expect(snap.bought).toBe(0.01);
+      expect(snap.sold).toBe(0.005);
+      expect(snap.realizedPnl).toBe(2.5);
+    });
+
+    it('recordBuyFill deducts USDC and adds token', () => {
+      binanceInstance = new GridBotInstance(binanceBot, {} as any);
+
+      binanceInstance.recordBuyFill(0.01, 100000, 0.5);
+
+      const snap = binanceInstance.getCapitalSnapshot();
+      // cost = 0.01 * 100000 + 0.5 = 1000.5, but clamped to 0
+      expect(snap.usdc).toBe(0);
+      expect(snap.token).toBeCloseTo(0.01, 6);
+      expect(snap.bought).toBeCloseTo(0.01, 6);
+    });
+
+    it('recordSellFill adds USDC proceeds and deducts token', () => {
+      binanceBot.capital_usdc = 500;
+      binanceBot.capital_token = 0.01;
+      binanceBot.total_base_bought = 0.01;
+      binanceInstance = new GridBotInstance(binanceBot, {} as any);
+
+      binanceInstance.recordSellFill(0.005, 105000, 0.3);
+
+      const snap = binanceInstance.getCapitalSnapshot();
+      // proceeds = 0.005 * 105000 - 0.3 = 525 - 0.3 = 524.7
+      expect(snap.usdc).toBeCloseTo(500 + 524.7, 2);
+      expect(snap.token).toBeCloseTo(0.01 - 0.005, 6);
+      expect(snap.sold).toBeCloseTo(0.005, 6);
+    });
+
+    it('getBinanceBuyCap returns capital_usdc', () => {
+      binanceInstance = new GridBotInstance(binanceBot, {} as any);
+      expect(binanceInstance.getBinanceBuyCap()).toBe(1000);
+    });
+
+    it('getBinanceSellCap returns min(capital_token, wallet balance)', async () => {
+      binanceBot.capital_token = 0.005;
+      const mockClient = {
+        exchange: 'binance',
+        getBalance: vi.fn().mockResolvedValue({
+          balances: [{ asset: 'BTC', free: '0.003', locked: '0' }],
+        }),
+      };
+      binanceInstance = new GridBotInstance(binanceBot, mockClient as any);
+
+      const sellCap = await binanceInstance.getBinanceSellCap();
+      // min(0.005, 0.003) = 0.003
+      expect(sellCap).toBeCloseTo(0.003, 6);
+    });
+
+    it('getBinanceSellCap falls back to bot holdings when getBalance fails', async () => {
+      binanceBot.capital_token = 0.005;
+      const mockClient = {
+        exchange: 'binance',
+        getBalance: vi.fn().mockRejectedValue(new Error('network')),
+      };
+      binanceInstance = new GridBotInstance(binanceBot, mockClient as any);
+
+      const sellCap = await binanceInstance.getBinanceSellCap();
+      expect(sellCap).toBeCloseTo(0.005, 6);
+    });
+
+    it('blocks sell order when capital_token = 0', async () => {
+      binanceBot.capital_token = 0;
+      const mockClient = {
+        exchange: 'binance',
+        getBalance: vi.fn().mockResolvedValue({
+          balances: [{ asset: 'BTC', free: '0', locked: '0' }],
+        }),
+      };
+      binanceInstance = new GridBotInstance(binanceBot, mockClient as any);
+
+      await binanceInstance.placeGridOrder({
+        id: 1, bot_id: 42, level_index: 0, price: 100000,
+        side: 'sell', quantity: 0.001, is_filled: false, created_at: '',
+      });
+
+      expect(mockDb.createOrder).not.toHaveBeenCalled();
+    });
+
+    it('blocks buy order when cost exceeds capital_usdc', async () => {
+      binanceBot.capital_usdc = 50; // only $50 available
+      binanceInstance = new GridBotInstance(binanceBot, {} as any);
+
+      await binanceInstance.placeGridOrder({
+        id: 1, bot_id: 42, level_index: 0, price: 100000,
+        side: 'buy', quantity: 0.001, is_filled: false, created_at: '',
+      });
+
+      // cost = 0.001 * 100000 = 100 > 50 → blocked
+      expect(mockDb.createOrder).not.toHaveBeenCalled();
     });
   });
 });
