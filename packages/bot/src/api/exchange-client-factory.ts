@@ -11,11 +11,15 @@
 // The factory returns a singleton per exchange, cached for 5 minutes.
 // Credentials are read from env at construction time.
 //
+// IMPORTANT: the GRVT client is loaded lazily (dynamic import) to permit
+// Binance-only deployments where GRVT_TRADING_ACCOUNT_ID may not be set.
+// A top-level `import { grvtClient } from './client.js'` would throw
+// at module load time if the env var is absent.
+//
 // Multi-user / sub-account: this factory is NOT used for per-user credentials.
 // It is for the no-login single-user mode. For multi-user, each user has their
 // own encrypted credentials in the DB (see grvt-client-factory.ts).
 
-import { grvtClient } from './client.js';
 import { BinanceClient } from './binance-client.js';
 import type { IExchangeClient } from './exchange-client.interface.js';
 
@@ -38,7 +42,7 @@ function cacheKey(exchange: ExchangeId): ExchangeId {
  * Get a cached exchange client for the given exchange.
  * Credentials are read from env vars (no user login).
  */
-export function getExchangeClient(exchange: ExchangeId): IExchangeClient {
+export async function getExchangeClient(exchange: ExchangeId): Promise<IExchangeClient> {
   const key = cacheKey(exchange);
   const hit = cache.get(key);
   if (hit && hit.expiresAt > Date.now()) {
@@ -51,10 +55,12 @@ export function getExchangeClient(exchange: ExchangeId): IExchangeClient {
     const network = (process.env.BINANCE_ENV === 'mainnet' ? 'mainnet' : 'testnet');
     client = new BinanceClient(network);
   } else {
-    // GRVT still uses the existing concrete singleton. A proper
-    // GrvtExchangeAdapter is tracked in Kanban; this cast keeps the factory
-    // compiling while the engine is refactored to consume normalized shapes.
-    client = grvtClient as unknown as IExchangeClient;
+    // GRVT: lazy dynamic import so this factory doesn't crash when
+    // GRVT_TRADING_ACCOUNT_ID is unset (Binance-only environments).
+    const { grvtClient } = await import('./client.js');
+    const { GrvtExchangeAdapter } = await import('./grvt-exchange-adapter.js');
+    const network = (process.env.GRVT_ENV === 'mainnet' ? 'mainnet' : 'testnet');
+    client = new GrvtExchangeAdapter(grvtClient, network);
   }
 
   cache.set(key, { client, expiresAt: Date.now() + TTL_MS });

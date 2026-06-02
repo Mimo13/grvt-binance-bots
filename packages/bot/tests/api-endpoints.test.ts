@@ -139,7 +139,7 @@ function createTestApp() {
   const db = makeMockDb();
   const grvtClient = makeMockGrvtClient();
   const binanceClient = makeMockBinanceClient();
-  mockGetExchangeClient.mockReturnValue(binanceClient as any);
+  mockGetExchangeClient.mockResolvedValue(binanceClient as any);
   const engineOps = makeMockEngineOps();
   const gridBotDb = makeMockGridBotDb();
 

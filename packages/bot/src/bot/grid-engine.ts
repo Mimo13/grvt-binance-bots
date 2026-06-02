@@ -448,7 +448,7 @@ export class GridEngine extends EventEmitter {
 
     // Binance: credentials from env vars (no multi-tenant DB routing)
     if (exchange === 'binance') {
-      return getExchangeClient('binance');
+      return await getExchangeClient('binance');
     }
 
     // GRVT: per-user credentials with env fallback for legacy bots
@@ -925,7 +925,7 @@ export class GridEngine extends EventEmitter {
         // Establecer leverage solo para exchanges que lo soportan (GRVT/perps).
         // Binance Spot/Testnet has no leverage endpoint; calling a Futures/GRVT
         // leverage method here breaks the Spot start path.
-        if ((bot as any).exchange !== 'binance' && typeof (client as any).setLeverage === 'function') {
+        if (bot.exchange !== 'binance' && typeof (client as any).setLeverage === 'function') {
           await (client as any).setLeverage(bot.pair, bot.leverage);
         }
         // Colocar órdenes iniciales
@@ -2038,7 +2038,7 @@ export class GridEngine extends EventEmitter {
       const client = await this.getClientForBot(bot);
       let allFills: any[];
       try {
-        allFills = (bot as any).exchange === 'binance'
+        allFills = (bot as { exchange?: string }).exchange === 'binance'
           ? await (client as any).getFillHistory(instrument, 1000)
           : await (client as any).getFillHistory(1000, instrument);
       } catch (err) {

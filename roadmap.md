@@ -8,16 +8,26 @@ Convertir el fork actual en un producto dual-exchange real, verificable y manten
 
 No avanzar a testnet real hasta que el backend compile, el exchange se persista correctamente, el engine no ejecute rutas GRVT para bots Binance, y haya tests mínimos de routing/órdenes/filtros.
 
+---
+
+## Decisiones tomadas (2026-06-02)
+
+| Decisión | Valor |
+|----------|-------|
+| **Exchange Binance** | Spot Testnet (NO Futures) |
+| **Quote currency** | USDC |
+| **Endpoint tipo** | `/api/v3` (REST), `wss://*.binance.vision/ws` (WS) |
+| **Dashboard principal** | `grvt-binance-bots` → puerto **3849** |
+| **Dashboard legacy** | `grvt-grid-bot` → puerto **3848** (proyecto separado) |
+| **Arquitectura** | Opción C: Dashboard compartido, engines separados (ADR-001) |
+| **Notificaciones** | Solo Telegram (no email) |
+| **Binance Spot** | Long-only, leverage 1x, sin liquidation, sin funding |
+
+Ver ADR-001 en [docs/ADR-001-binance-grvt-architecture.md](docs/ADR-001-binance-grvt-architecture.md).
+
+---
+
 ## Estado base detectado
-
-- Frontend: bastante avanzado, build OK.
-- Backend: no compila actualmente.
-- Tests backend: con `MOCK_MODE=true` pasan 121 y fallan 3; sin mock fallan por credenciales GRVT.
-- Binance: cliente escrito, pero no integrado de forma segura.
-- Motor: sigue siendo GRVT-céntrico en varias rutas.
-- Docs: buenas, pero mezclan Binance Spot Testnet y Futures.
-- Kanban: tiene buena estructura, pero algunos estados están optimistas.
-
 ---
 
 # ROADMAP EJECUTIVO

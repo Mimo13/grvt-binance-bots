@@ -103,8 +103,7 @@ Examples: `BTCUSDC`, `SOLUSDC`, `ETHUSDC`
 Note: Grid bots use USDC-margined Spot pairs on Binance. Pairs are `{BASE}USDC`.
 
 **Symbol conversion**:
-- GRVT `BTC_USDT_Perp` → `BTCUSDT` on Binance Spot
-- GRVT `BTC_USDT_Perp` → `BTCUSDC` on Binance USDⓈ-Margined Futures
+- GRVT `BTC_USDT_Perp` ↔ `BTCUSDC` on Binance Spot
 
 ---
 
@@ -225,27 +224,20 @@ GET /position?instrument=BTC_USDT_Perp
 ### Binance
 
 ```typescript
-// Balance (USDⓈ-Margined)
-GET /fapi/v3/account
+// Balance (Spot)
+GET /api/v3/account
 {
-  "assets": [
+  "balances": [
     {
       "asset": "USDC",
-      "walletBalance": "10000.00",
-      "unrealizedProfit": "25.00"
-    }
-  ],
-  "positions": [
-    {
-      "symbol": "BTCUSDC",
-      "positionAmt": "0.5",
-      "entryPrice": "95000.00",
-      "markPrice": "95050.00",
-      "unrealizedProfit": "25.00",
-      "isolatedMargin": "200.00"
+      "free": "9500.00",
+      "locked": "500.00"
     }
   ]
 }
+```
+
+Binance Spot does not have "positions" in the futures sense — balance is wallet-level. Per-bot capital isolation is tracked in the local database (`capital_usdc`, `capital_token`), not on the exchange.
 ```
 
 ---
@@ -277,13 +269,13 @@ GET /fills?instrument=BTC_USDT_Perp&limit=50
 ### Binance
 
 ```typescript
-GET /fapi/v1/userTrades?symbol=BTCUSDC&limit=50
+GET /api/v3/myTrades?symbol=BTCUSDC&limit=50
 [
   {
     "id": 12345,
     "orderId": 789,
     "symbol": "BTCUSDC",
-    "side": "BUY",
+    "isBuyer": true,
     "price": "95000.00",
     "qty": "0.01",
     "commission": "0.95",
@@ -323,14 +315,14 @@ ws://edge.testnet.grvt.io/ws/v1?channel=orders:{sub_account_id}
 
 ```typescript
 // Ticker streams
-wss://fstream.binance.com/ws/btcusdc@ticker
-wss://fstream.binance.com/ws/btcusdc@depth
+wss://stream.binance.com:9443/ws/btcusdc@ticker
+wss://stream.binance.com:9443/ws/btcusdc@depth
 
 // Combined stream
-wss://fstream.binance.com/ws/!ticker@arr
+wss://stream.binance.com:9443/ws/!miniTicker@arr
 
-// Account updates (requires auth)
-wss://fstream.binance.com/ws/<streamKey>
+// Account updates (requires auth — listen key)
+wss://stream.binance.com:9443/ws/<listenKey>
 
 // Message format
 {
@@ -354,11 +346,11 @@ wss://fstream.binance.com/ws/<streamKey>
 | Chain ID | 326 (testnet) | N/A |
 | Order signed by | Ethereum key | API secret |
 | Sub-accounts | Yes (multiple per user) | No |
-| Position endpoint | `/position` | `/fapi/v3/positionRisk` |
-| Fill history | `/fills` | `/fapi/v1/userTrades` |
+| Position endpoint | `/position` | None (Spot has no positions; balance is wallet-level) |
+| Fill history | `/fills` | `/api/v3/myTrades` |
 | WS ticker channel | `ticker:{instrument}` | `{symbol}@ticker` |
-| Leverage | Per-position | Per-position |
-| Liquidation | Calculated by exchange | Calculated by exchange |
+| Leverage | Per-position | N/A (Spot, always 1x) |
+| Liquidation | Calculated by exchange | N/A (Spot has no liquidation) |
 
 ---
 
@@ -373,4 +365,4 @@ BINANCE_TESTNET_API_KEY=...
 BINANCE_TESTNET_SECRET_KEY=...
 ```
 
-Use `BNB` as the testnet asset (not real USDT/USDC) — testnet balance is artificial.
+Use `USDC` or `BUSD` as the testnet quote asset. Testnet balance is artificial — use the faucet at https://testnet.binance.vision/faucet to obtain test USDC.

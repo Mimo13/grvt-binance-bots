@@ -63,10 +63,13 @@ DASHBOARD_API_KEY=your-secret-key
 
 ```bash
 docker compose up -d
-open http://95.111.244.212:3848/dashboard/
+open http://95.111.244.212:3849/dashboard/
 ```
 
 The dashboard opens with **All Bots** tab. Use the **GRVT** and **Binance** tabs to filter by exchange.
+
+> **Ports**: This project (`grvt-binance-bots`) exposes its dashboard on **port 3849** by default.
+> A separate legacy project (`grvt-grid-bot`) may run on port 3848. Both can coexist on the same host.
 
 ### 4. Quick Start: Binance Spot Bot
 
@@ -179,14 +182,35 @@ grvt-binance-bots/
 | `GRVT_PRIVATE_KEY` | Ethereum private key | `0xabc...` |
 | `GRVT_API_KEY` | GRVT API key | |
 | `BINANCE_ENV` | `testnet` or `mainnet` | `testnet` |
-| `BINANCE_API_KEY` | Binance API key (production) | |
-| `BINANCE_API_SECRET` | Binance API secret | |
+| `BINANCE_API_KEY` | Binance API key (production mainnet Spot) | |
+| `BINANCE_API_SECRET` | Binance API secret (production mainnet Spot) | |
 | `BINANCE_TESTNET_API_KEY` | Binance testnet key | |
 | `BINANCE_TESTNET_SECRET_KEY` | Binance testnet secret | |
 | `DASHBOARD_API_KEY` | Dashboard auth key | |
 | `TRADING_MODE` | `paper`, `testnet`, or `live` | `testnet` |
 
 > **Note**: Binance testnet keys are generated at https://testnet.binance.vision. Testnet USDC is available via the faucet on the same site. The variable name is `BINANCE_TESTNET_SECRET_KEY` (not `BINANCE_TESTNET_API_SECRET`).
+
+---
+
+## Operational Notes
+
+### ❌ Do NOT use DELETE as stop/restart
+The `DELETE /api/v2/bots/:id` endpoint **permanently deletes the bot** — it does NOT just cancel orders or pause. To stop a running bot:
+- Use `POST /api/v2/bots/:id/pause` (pauses trading, keeps orders)
+- Use `POST /api/v2/bots/:id/close` (cancels orders, stops the bot)
+- Use `POST /api/v2/bots/:id/start` to resume a paused bot
+
+The dashboard uses **Save → Close → Restart** in one click, which calls the correct lifecycle endpoints.
+
+### Testing with MOCK_MODE
+To run backend tests without exchange credentials:
+
+```bash
+MOCK_MODE=true npm test --workspace=@grvt-binance/bot
+```
+
+Mock mode uses in-memory fake exchange clients — no API keys needed. Tests that require GRVT credentials will be skipped automatically.
 
 ---
 

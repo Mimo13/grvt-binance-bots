@@ -796,7 +796,39 @@ export class GRVTClient {
   }
 }
 
-// Instancia singleton del client
-export const grvtClient = new GRVTClient();
+// ─── Lazy Singleton ───────────────────────────────────────────────────────
+// The grvtClient MUST be lazy so that merely importing this module does not
+// fail when GRVT_TRADING_ACCOUNT_ID is unset.  The proxy creates the real
+// GRVTClient on the first property access (method call or field read).
+// This lets modules like exchange-client-factory be imported in Binance-only
+// environments without crashing at import time.
+//
+// All method calls are bound to the real instance so `this` works correctly.
+
+function makeLazySingleton<T extends object>(factory: () => T): T {
+  let instance: T | null = null;
+  return new Proxy({} as T, {
+    get(_, prop) {
+      if (!instance) {
+        instance = factory();
+      }
+      const value = (instance as unknown as Record<string | symbol, unknown>)[prop as string | symbol];
+      if (typeof value === 'function') {
+        return value.bind(instance);
+      }
+      return value;
+    },
+    set(_, prop, value) {
+      if (!instance) {
+        instance = factory();
+      }
+      (instance as unknown as Record<string | symbol, unknown>)[prop as string | symbol] = value;
+      return true;
+    },
+  });
+}
+
+/** Lazy singleton GRVT client — safe to import even without GRVT env vars. */
+export const grvtClient: GRVTClient = makeLazySingleton(() => new GRVTClient());
 
 export default grvtClient;

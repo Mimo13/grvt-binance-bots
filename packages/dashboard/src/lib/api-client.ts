@@ -132,6 +132,10 @@ export const api = {
     const qs = network ? `?network=${encodeURIComponent(network)}` : '';
     return request<{ instruments: unknown[]; grvt_network?: 'testnet' | 'mainnet' }>(`/instruments${qs}`);
   },
+  getCapabilities: (exchange?: 'grvt' | 'binance') => {
+    const qs = exchange ? `?exchange=${exchange}` : '';
+    return request<{ capabilities: import('./api-types').ExchangeCapabilities | Record<string, import('./api-types').ExchangeCapabilities> }>(`/capabilities${qs}`);
+  },
   getBalance: () => request<{ balance: unknown }>('/balance'),
 
   getTrades: (id: number, opts: { limit?: number } = {}) => {

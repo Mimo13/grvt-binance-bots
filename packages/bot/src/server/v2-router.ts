@@ -25,6 +25,16 @@ import { sendPasswordResetEmail, isMailerConfigured } from '../mail/mailer.js';
 import { GRVTClient, type GrvtClientCreds, type GrvtNetwork } from '../api/client.js';
 import { invalidateGrvtClient } from '../api/grvt-client-factory.js';
 import { getExchangeClient } from '../api/exchange-client-factory.js';
+import {
+  toSharedBotSummary,
+  toBotDetail,
+  getCapabilities,
+  computePortfolioPnL,
+  type BotSummaryRow,
+  type SharedBotSummary,
+  type ExchangeCapabilities,
+} from '../api/bot-normalizer.js';
+import type { ExchangeId } from '../api/exchange-client.interface.js';
 
 
 // Augment Express Request to carry the authenticated user id set
@@ -1067,13 +1077,15 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
 
   // ── GET /api/v2/bots ──────────────────────────────────────────────
   // List all bots with the fields the dashboard cares about.
+  // Uses the normalizer to produce a shared read-model safe for both exchanges.
   router.get('/bots', asyncHandler(async (req, res) => {
     // Multi-tenant: list only the bots owned by this user. Legacy
     // rows with NULL user_id are treated as user 1's so they keep
     // showing up after the migration.
     const userId = req.userId!;
-    const rows = await dbAll(db, `
-      SELECT id, pair, direction, leverage, lower_price, upper_price, num_grids,
+    const rows = await dbAll<BotSummaryRow>(db, `
+      SELECT id, pair, exchange,
+             direction, leverage, lower_price, upper_price, num_grids,
              investment_usdt, grid_profit_usdt, trend_pnl_usdt, total_pnl_usdt,
              status, position_size, avg_entry_price, liquidation_price,
              created_at, updated_at,
@@ -1081,23 +1093,29 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
              last_compound_at, total_reinvested, original_investment_usdt,
              quantity_per_level,
              safeguard_enabled, safeguard_threshold_pct, safeguard_action,
-             grvt_sub_account_id
+             virtual_enabled, active_window_size,
+             auto_shift_enabled, auto_shift_pct, last_auto_shift_at,
+             sl_pct, tp_pct,
+             grvt_sub_account_id, grvt_network,
+             capital_usdc, capital_token,
+             total_base_bought, total_base_sold, realized_pnl
       FROM grid_bots
       WHERE COALESCE(user_id, 1) = ?
       ORDER BY created_at DESC
     `, [userId]);
-    res.json({ bots: rows });
+    res.json({ bots: rows.map(toSharedBotSummary) });
     return;
   }));
 
   // ── GET /api/v2/bots/:id ──────────────────────────────────────────
+  // Returns exchange-specific detail model via the normalizer.
   router.get('/bots/:id', asyncHandler(async (req, res) => {
     const id = parseInt(String(req.params.id ?? ''), 10);
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid bot id' });
     await requireBotOwnership(db, id, req.userId!);
-    const bot = await dbGet(db, `SELECT * FROM grid_bots WHERE id = ?`, [id]);
-    if (!bot) return res.status(404).json({ error: 'bot not found' });
-    res.json({ bot });
+    const row = await dbGet<BotSummaryRow>(db, `SELECT * FROM grid_bots WHERE id = ?`, [id]);
+    if (!row) return res.status(404).json({ error: 'bot not found' });
+    res.json({ bot: toBotDetail(row) });
     return;
   }));
 
@@ -1131,7 +1149,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     // Do not always call GRVT here: Binance bots must route through the
     // exchange abstraction or the dashboard shows GRVT state for a Binance bot.
     const exchange = bot.exchange ?? 'grvt';
-    const exchangeClient = exchange === 'binance' ? getExchangeClient('binance') : grvtClient;
+    const exchangeClient = exchange === 'binance' ? await getExchangeClient('binance') : grvtClient;
     const [ticker, position, openOrders] = await Promise.all([
       cache.getOrFetch(`${exchange}:ticker:${bot.pair}`, 2_000, () => exchangeClient.getTicker(bot.pair)),
       cache.getOrFetch(`${exchange}:position:${bot.pair}`, 2_000, () => exchangeClient.getPosition(bot.pair)),
@@ -1148,6 +1166,25 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       position,
       openOrders,
       ts: Date.now()
+    });
+    return;
+  }));
+
+  // ── GET /api/v2/capabilities ──────────────────────────────────────
+  // Returns ExchangeCapabilities for a given exchange, or all capabilities
+  // if no exchange param is provided. Frontend uses this to know which
+  // UI controls to show (leverage slider, direction toggle, etc.).
+  router.get('/capabilities', asyncHandler(async (_req, res) => {
+    const exchange = String(_req.query.exchange ?? '').toLowerCase();
+    if (exchange === 'grvt' || exchange === 'binance') {
+      res.json({ capabilities: getCapabilities(exchange) });
+      return;
+    }
+    res.json({
+      capabilities: {
+        grvt: getCapabilities('grvt'),
+        binance: getCapabilities('binance'),
+      },
     });
     return;
   }));
@@ -1214,7 +1251,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       : `candles:${pair}:${interval}:${limit}`;
     const candles = await cache.getOrFetch(cacheKey, ttl, async () => {
       if (exchange === 'binance') {
-        const binanceClient = getExchangeClient('binance');
+        const binanceClient = await getExchangeClient('binance');
         const bnInterval = GRVT_TO_BINANCE_INTERVAL[interval] ?? '1h';
         const rows = await binanceClient.getKlines(pair, bnInterval, limit);
         // Binance returns ascending already — no reverse needed.
@@ -2482,36 +2519,37 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
   // Equity / PnL are rebuilt from `grid_profit_usdt + trend_pnl_usdt`
   // (NOT `total_pnl_usdt`, which is stale — written at insert time and
   // not refreshed by the engine on every tick).
+  // Uses computePortfolioPnL for exchange-aware aggregation (no trend_pnl
+  // for Binance bots since Spot has no unrealized PnL).
   router.get('/portfolio-summary', asyncHandler(async (req, res) => {
     const userId = req.userId!;
-    const bots = await dbAll<{
-      id: number; pair: string; status: string; leverage: number;
-      investment_usdt: number;
-      grid_profit_usdt: number; trend_pnl_usdt: number;
-      position_size: number; avg_entry_price: number;
-    }>(db, `
-      SELECT id, pair, status, leverage, investment_usdt,
+    const bots = await dbAll<BotSummaryRow>(db, `
+      SELECT id, pair, exchange, status, leverage, investment_usdt,
              grid_profit_usdt, trend_pnl_usdt, position_size, avg_entry_price
       FROM grid_bots
       WHERE COALESCE(user_id, 1) = ? AND status != 'stopped'
     `, [userId]);
 
     let totalInvested = 0;
-    let totalEquity = 0;
-    let totalRealized = 0;
-    let totalUnrealized = 0;
     let totalPositionUsdt = 0;
     let weightedLeverage = 0;
     const pairExposure: Record<string, number> = {};
+    const metrics = bots.map(b => ({
+      investmentUsdt: b.investment_usdt,
+      gridProfitUsdt: b.grid_profit_usdt,
+      trendPnlUsdt: b.trend_pnl_usdt,
+      positionSize: b.position_size,
+      avgEntryPrice: b.avg_entry_price,
+      leverage: b.leverage,
+      exchange: (b.exchange ?? 'grvt') as ExchangeId,
+    }));
+
+    // Exchange-aware PnL computation — Binance bots contribute 0 trend_pnl
+    const { totalEquity, totalRealized, totalUnrealized, totalPnl } = computePortfolioPnL(metrics);
 
     for (const b of bots) {
-      const botPnl = b.grid_profit_usdt + b.trend_pnl_usdt;
-      const equity = b.investment_usdt + botPnl;
-      const positionUsdt = b.position_size * b.avg_entry_price;
       totalInvested += b.investment_usdt;
-      totalEquity += equity;
-      totalRealized += b.grid_profit_usdt;
-      totalUnrealized += b.trend_pnl_usdt;
+      const positionUsdt = b.position_size * b.avg_entry_price;
       totalPositionUsdt += positionUsdt;
       weightedLeverage += b.leverage * b.investment_usdt;
       pairExposure[b.pair] = (pairExposure[b.pair] ?? 0) + positionUsdt;
@@ -2526,8 +2564,8 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       totalEquity: round(totalEquity, 2),
       totalRealized: round(totalRealized, 2),
       totalUnrealized: round(totalUnrealized, 2),
-      totalPnl: round(totalRealized + totalUnrealized, 2),
-      totalPnlPct: totalInvested > 0 ? round(((totalRealized + totalUnrealized) / totalInvested) * 100, 2) : 0,
+      totalPnl: round(totalPnl, 2),
+      totalPnlPct: totalInvested > 0 ? round((totalPnl / totalInvested) * 100, 2) : 0,
       totalPositionUsdt: round(totalPositionUsdt, 2),
       avgLeverage: round(avgLeverage, 1),
       pairExposure,

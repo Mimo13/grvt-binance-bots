@@ -1,6 +1,6 @@
 # GRVT-Binance Grid Bots
 
-**Multi-exchange grid trading bot for GRVT and Binance perpetual futures.**
+**Multi-exchange grid trading bot for GRVT perpetual futures and Binance Spot.**
 
 A fork of [GRVTBot](https://github.com/Mimo13/GRVTBot) extended to run both GRVT and Binance grids from a single dashboard. Same engine, same features, same API — just with exchange-aware routing.
 
@@ -21,7 +21,7 @@ cp .env.example .env
 docker compose up -d
 
 # Open dashboard
-open http://95.111.244.212:3848/dashboard/
+open http://95.111.244.212:3849/dashboard/
 ```
 
 ---
@@ -94,7 +94,7 @@ interface IExchangeClient {
 | Exchange | Pairs | Testnet | Auth Method | Docs |
 |----------|-------|---------|-------------|------|
 | GRVT | USDT perpetuals | ✅ testnet.grvt.io | EIP-712 signatures | [GRVT API](https://api.testnet.grvt.io) |
-| Binance | USDC perpetuals | ✅ testnet.binance.vision | HMAC-SHA256 | [Binance API](https://developers.binance.com) |
+| Binance | USDC Spot | ✅ testnet.binance.vision | HMAC-SHA256 | [Binance API](https://developers.binance.com) |
 
 ---
 
@@ -145,6 +145,7 @@ grvt-binance-bots/
 │   └── notifier/          # Telegram sidecar (exchange-agnostic)
 │
 ├── docs/
+│   ├── ADR-001-binance-grvt-architecture.md  # Decision record: architecture
 │   ├── ARCHITECTURE.md    # This file
 │   ├── EXCHANGES.md       # GRVT vs Binance API differences
 │   └── SECURITY.md        # Exchange-specific security notes
@@ -157,20 +158,19 @@ grvt-binance-bots/
 ## Environment Variables
 
 ```env
-# GRVT (existing)
+# GRVT
 GRVT_ENV=testnet
 GRVT_API_KEY=...
 GRVT_API_SECRET=...
 
-# Binance
-BINANCE_API_KEY=...
-BINANCE_API_SECRET=...
+# Binance (testnet shown; mainnet uses BINANCE_API_KEY / BINANCE_API_SECRET)
+BINANCE_ENV=testnet
 BINANCE_TESTNET_API_KEY=...
 BINANCE_TESTNET_SECRET_KEY=...
 
 # Dashboard
 DASHBOARD_API_KEY=...
-BOT_PORT=3848
+BOT_PORT=3849
 
 # Telegram
 TELEGRAM_BOT_TOKEN=...

@@ -9,19 +9,20 @@ export type Exchange = 'grvt' | 'binance';
 export interface BotSummary {
   id: number;
   pair: string;
-  direction: 'long' | 'short';
-  leverage: number;
+  exchange: Exchange;         // required — normalizer always sets it
+  direction: 'long' | 'short'; // 'long' for Binance Spot
+  leverage: number;            // 1 for Binance Spot
   lower_price: number;
   upper_price: number;
   num_grids: number;
   investment_usdt: number;
   grid_profit_usdt: number;
-  trend_pnl_usdt: number;
+  trend_pnl_usdt: number;     // 0 for Binance Spot
   total_pnl_usdt: number;
   status: BotStatus;
   position_size: number;
   avg_entry_price: number;
-  liquidation_price: number | null;
+  liquidation_price: number | null; // null for Binance Spot
   created_at: string;
   updated_at: string;
   // Compound rebalance (optional — 0 or absent = disabled)
@@ -46,9 +47,12 @@ export interface BotSummary {
   grvt_sub_account_id?: number | null;
   // Per-bot GRVT environment. Existing rows default to testnet.
   grvt_network?: GrvtNetwork;
-  // Exchange: 'grvt' (USDT pairs) or 'binance' (USDC pairs).
-  // Existing rows default to 'grvt'.
-  exchange?: Exchange;
+  // Binance Spot capital isolation
+  capital_usdc?: number;
+  capital_token?: number;
+  total_base_bought?: number;
+  total_base_sold?: number;
+  realized_pnl?: number;
 }
 
 export interface GridLevel {
@@ -366,4 +370,25 @@ export class ApiError extends Error {
     super(message);
     this.name = 'ApiError';
   }
+}
+
+// ─── Exchange Capabilities ────────────────────────────────────────────
+// Tells the frontend which exchange-specific actions to show/hide.
+// Mirror of packages/bot/src/api/bot-normalizer.ts ExchangeCapabilities.
+
+export interface ExchangeCapabilities {
+  id: Exchange;
+  label: string;
+  supportsLeverage: boolean;
+  supportsDirection: boolean;
+  supportsLiquidation: boolean;
+  supportsFunding: boolean;
+  supportsSubAccounts: boolean;
+  supportsSpotCapital: boolean;
+  supportsRangeUpdate: boolean;
+  supportsAutoShift: boolean;
+  supportsCancelAll: boolean;
+  supportsRestart: boolean;
+  supportsStop: boolean;
+  defaultCurrency: string;
 }
